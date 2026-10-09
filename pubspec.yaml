@@ -13,12 +13,15 @@ dependencies:
   file_picker_web: 4.0.1
   path_provider: 2.1.6
   web: 1.1.1
+  file_picker_linux: 2.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/
   fonts:
     # CanvasKit requires a registered Roboto fallback. Alias our bundled
     # DejaVu font so both debug and release builds avoid a network font fetch.

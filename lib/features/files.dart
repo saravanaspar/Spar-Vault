@@ -11,11 +11,14 @@ Future<Uint8List?> pickBytes({
   String? extension,
   String title = 'Choose file',
 }) async {
+  final linuxOpts = await pickerLinuxOptions(title: title);
+  ensureDialogForeground(title);
   final file = await FilePicker.pickFile(
     dialogTitle: title,
     type: extension == null ? FileType.any : FileType.custom,
     allowedExtensions: extension == null ? null : [extension],
     webOptions: backupPickerOptions(),
+    linuxOptions: linuxOpts,
   );
   if (file == null) return null;
   final size = await file.length();

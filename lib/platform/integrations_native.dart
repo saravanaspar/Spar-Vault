@@ -6,6 +6,7 @@ import 'package:vault_core/vault_core.dart';
 
 import '../features/files.dart';
 import 'device_security.dart';
+import 'picker_options.dart';
 
 class PlatformIntegrations {
   Future<List<String>> backupCopies(String id) async => [];
@@ -139,8 +140,12 @@ class PlatformIntegrations {
     if (isAndroid) {
       return await channel.invokeMethod<String>('chooseBackupDirectory');
     }
+    const title = 'Choose private encrypted-backup folder';
+    final linuxOpts = await pickerLinuxOptions(title: title);
+    ensureDialogForeground(title);
     return FilePicker.getDirectoryPath(
-      dialogTitle: 'Choose private encrypted-backup folder',
+      dialogTitle: title,
+      linuxOptions: linuxOpts,
     );
   }
 

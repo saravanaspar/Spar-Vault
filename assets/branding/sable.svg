@@ -1,8 +1,44 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" rx="224" fill="#12141B"/>
-  <path d="M512 185 774 286v229c0 150-104 260-262 336-158-76-262-186-262-336V286Z" fill="#1D202A" stroke="#E0BB83" stroke-width="40" stroke-linejoin="round"/>
-  <rect x="390" y="457" width="244" height="204" rx="42" fill="#E0BB83"/>
-  <path d="M435 460v-65a77 77 0 0 1 154 0v65" fill="none" stroke="#E0BB83" stroke-width="42"/>
-  <circle cx="512" cy="535" r="28" fill="#12141B"/>
-  <path d="M501 547h22v64h-22Z" fill="#12141B"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#181B26"/>
+      <stop offset="100%" stop-color="#0C0D13"/>
+    </linearGradient>
+    <linearGradient id="shield-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FBE0A6"/>
+      <stop offset="40%" stop-color="#E3B668"/>
+      <stop offset="100%" stop-color="#BD8533"/>
+    </linearGradient>
+    <linearGradient id="shield-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#222634"/>
+      <stop offset="100%" stop-color="#14161F"/>
+    </linearGradient>
+    <linearGradient id="gold-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FCE5B0"/>
+      <stop offset="60%" stop-color="#E0B05C"/>
+      <stop offset="100%" stop-color="#C78D32"/>
+    </linearGradient>
+    <linearGradient id="shackle" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FCE5B0"/>
+      <stop offset="50%" stop-color="#E0B05C"/>
+      <stop offset="100%" stop-color="#B87F26"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <!-- Background squircle -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect x="4" y="4" width="1016" height="1016" rx="220" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="4"/>
+  <!-- Shield with soft depth shadow -->
+  <g filter="url(#shadow)">
+    <path d="M512 185 774 286v229c0 150-104 260-262 336-158-76-262-186-262-336V286Z" fill="url(#shield-fill)" stroke="url(#shield-stroke)" stroke-width="38" stroke-linejoin="round"/>
+    <!-- Padlock Shackle -->
+    <path d="M435 460v-65a77 77 0 0 1 154 0v65" fill="none" stroke="url(#shackle)" stroke-width="40" stroke-linecap="round"/>
+    <!-- Padlock Body -->
+    <rect x="390" y="457" width="244" height="204" rx="44" fill="url(#gold-body)"/>
+    <!-- Lock Keyhole -->
+    <circle cx="512" cy="535" r="26" fill="#12141B"/>
+    <path d="M501 547h22v62h-22Z" fill="#12141B"/>
+  </g>
 </svg>

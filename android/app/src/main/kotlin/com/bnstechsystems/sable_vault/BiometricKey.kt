@@ -14,6 +14,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import java.security.KeyStore
 import java.util.UUID
@@ -23,11 +24,12 @@ import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
-// Separate opt-in bindings: strong biometrics, or strong biometrics OR screen
-// credential. Each prompt authorizes the actual hardware cipher on every use.
+// Separate opt-in bindings: strong biometrics (per-use CryptoObject), or strong biometrics
+// OR screen credential (hardware time-authorized token allowing PIN, pattern, or password).
 class BiometricKey(private val activity: Activity, private val deviceLock: Boolean = false) {
     private val prefix = if (deviceLock) "spar-vault-device-v1" else "spar-vault-biometric-v1"
     private val prefs = activity.getSharedPreferences(if (deviceLock) "spar-device-v1" else "spar-biometric-v1", Activity.MODE_PRIVATE)
+    private val validityDuration get() = if (deviceLock) 30 else 0
     private val authenticators get() = BiometricManager.Authenticators.BIOMETRIC_STRONG or
         if (deviceLock) BiometricManager.Authenticators.DEVICE_CREDENTIAL else 0
     private val keyAuthenticators get() = KeyProperties.AUTH_BIOMETRIC_STRONG or
@@ -36,8 +38,15 @@ class BiometricKey(private val activity: Activity, private val deviceLock: Boole
     private fun validId(id: String) = Regex("^[a-f0-9]{32}$").matches(id)
     private fun validAlias(alias: String) = alias == prefix || Regex("^$prefix-[a-f0-9-]{36}$").matches(alias)
     private fun storedAlias() = prefs.getString("alias", prefix) ?: prefix // Legacy binding stays readable.
-    private class Operation(val result: MethodChannel.Result, val bytes: ByteArray,
-        val alias: String, val creating: Boolean, val cipher: Cipher) {
+    private class Operation(
+        val result: MethodChannel.Result,
+        val bytes: ByteArray,
+        val alias: String,
+        val creating: Boolean,
+        val key: SecretKey,
+        val cipher: Cipher? = null,
+        val nonce: ByteArray? = null
+    ) {
         val signal = CancellationSignal()
     }
     private var pending: Operation? = null
@@ -78,15 +87,20 @@ class BiometricKey(private val activity: Activity, private val deviceLock: Boole
         val hardware = if (Build.VERSION.SDK_INT >= 31)
             info.securityLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT || info.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
             else info.isInsideSecureHardware
+        val validDuration = if (deviceLock) {
+            info.userAuthenticationValidityDurationSeconds in 1..60 || info.userAuthenticationValidityDurationSeconds == 0
+        } else {
+            info.userAuthenticationValidityDurationSeconds == 0
+        }
         return hardware && info.isUserAuthenticationRequired && info.isUserAuthenticationRequirementEnforcedBySecureHardware &&
-            info.userAuthenticationValidityDurationSeconds == 0 && info.userAuthenticationType == keyAuthenticators
+            validDuration && info.userAuthenticationType == keyAuthenticators
     }
     private fun generate(alias: String): SecretKey {
         fun make(strongBox: Boolean): SecretKey {
             val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256).setUserAuthenticationRequired(true)
-                .setUserAuthenticationParameters(0, keyAuthenticators)
+                .setUserAuthenticationParameters(validityDuration, keyAuthenticators)
                 .setInvalidatedByBiometricEnrollment(!deviceLock)
             if (strongBox) builder.setIsStrongBoxBacked(true)
             return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply { init(builder.build()) }.generateKey()
@@ -118,23 +132,33 @@ class BiometricKey(private val activity: Activity, private val deviceLock: Boole
             // Preserve a working old binding until the new cipher succeeds.
             alias = "$prefix-${UUID.randomUUID()}"
             val key = generate(alias)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, key); cipher.updateAAD(aad(id))
-            val operation = Operation(result, bytes.copyOf(), alias, true, cipher)
+            val cipher = if (!deviceLock) {
+                Cipher.getInstance("AES/GCM/NoPadding").apply {
+                    init(Cipher.ENCRYPT_MODE, key)
+                    updateAAD(aad(id))
+                }
+            } else null
+            val operation = Operation(result, bytes.copyOf(), alias, true, key, cipher)
             pending = operation
-            prompt(operation) { authorized ->
-                val wrapped = authorized.doFinal(operation.bytes)
+            prompt(operation) { authCipher ->
+                val activeCipher = authCipher ?: Cipher.getInstance("AES/GCM/NoPadding").apply {
+                    init(Cipher.ENCRYPT_MODE, key)
+                    updateAAD(aad(id))
+                }
+                val wrapped = activeCipher.doFinal(operation.bytes)
                 try {
-                    if (authorized.iv.size != 12 || wrapped.size != 48) throw SecurityException()
+                    val iv = activeCipher.iv
+                    if (iv == null || iv.size != 12 || wrapped.size != 48) throw SecurityException("Invalid GCM parameters")
                     val oldAlias = storedAlias()
                     if (!prefs.edit().putString("alias", operation.alias).putString("vaultId", id)
-                            .putString("nonce", Base64.encodeToString(authorized.iv, Base64.NO_WRAP))
+                            .putString("nonce", Base64.encodeToString(iv, Base64.NO_WRAP))
                             .putString("wrapped", Base64.encodeToString(wrapped, Base64.NO_WRAP)).commit()) throw IllegalStateException()
                     if (validAlias(oldAlias) && oldAlias != operation.alias) deleteKey(oldAlias)
                     finish(operation, null, null)
                 } finally { wrapped.fill(0) }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("BiometricKey", "Hardware key wrapping setup failed", e)
             val operation = pending
             if (operation != null) finish(operation, null, "hardware", "Android could not authorize hardware key wrapping. Use your vault password/key.")
             else { alias?.let { deleteKey(it) }; result.error("hardware", "Hardware-backed authentication is unavailable on this device. Use your vault password/key.", null) }
@@ -151,22 +175,39 @@ class BiometricKey(private val activity: Activity, private val deviceLock: Boole
             val nonce = Base64.decode(prefs.getString("nonce", ""), Base64.NO_WRAP)
             wrapped = Base64.decode(prefs.getString("wrapped", ""), Base64.NO_WRAP)
             if (nonce.size != 12 || wrapped.size != 48) throw SecurityException()
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, nonce)); cipher.updateAAD(aad(id))
-            val operation = Operation(result, wrapped, alias, false, cipher)
+
+            val info = SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore").getKeySpec(key, KeyInfo::class.java) as KeyInfo
+            val isPerUse = info.userAuthenticationValidityDurationSeconds == 0
+
+            val cipher = if (isPerUse && !deviceLock) {
+                Cipher.getInstance("AES/GCM/NoPadding").apply {
+                    init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, nonce))
+                    updateAAD(aad(id))
+                }
+            } else null
+
+            val operation = Operation(result, wrapped, alias, false, key, cipher, nonce)
             pending = operation; wrapped = null
-            prompt(operation) { authorized ->
-                val root = authorized.doFinal(operation.bytes)
+            prompt(operation) { authCipher ->
+                val activeCipher = authCipher ?: run {
+                    if (isPerUse && !deviceLock) throw SecurityException("Per-use key requires biometric sensor")
+                    Cipher.getInstance("AES/GCM/NoPadding").apply {
+                        init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, nonce))
+                        updateAAD(aad(id))
+                    }
+                }
+                val root = activeCipher.doFinal(operation.bytes)
                 try { if (root.size != 32) throw SecurityException(); finish(operation, root, null) }
                 finally { root.fill(0) }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("BiometricKey", "Unlock failed", e)
             val operation = pending
             if (operation != null) finish(operation, null, "invalidated", "Device binding is unavailable. Use your vault password/key and enable it again.")
             else result.error("invalidated", "Device binding changed or is unavailable. Use your vault password/key and enable it again.", null)
         } finally { wrapped?.fill(0) }
     }
-    private fun prompt(operation: Operation, action: (Cipher) -> Unit) {
+    private fun prompt(operation: Operation, action: (Cipher?) -> Unit) {
         timeout = Runnable {
             if (pending === operation) {
                 finish(operation, null, "timeout", "Android authentication timed out. Please retry.")
@@ -178,30 +219,38 @@ class BiometricKey(private val activity: Activity, private val deviceLock: Boole
             .setAllowedAuthenticators(authenticators)
         // Android forbids a negative button when DEVICE_CREDENTIAL is enabled.
         if (!deviceLock) builder.setNegativeButton("Cancel", activity.mainExecutor) { _, _ -> cancel(operation) }
-        builder.build().authenticate(BiometricPrompt.CryptoObject(operation.cipher), operation.signal,
-            activity.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    if (pending !== operation) return
-                    try {
-                        val cipher = result.cryptoObject?.cipher ?: throw SecurityException()
-                        if (cipher !== operation.cipher) throw SecurityException()
-                        action(cipher)
-                    } catch (_: Exception) { finish(operation, null, "failed", "Android authentication did not complete the protected cipher operation. Use your vault password/key.") }
+        val promptCallback = object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                if (pending !== operation) return
+                try {
+                    val cipher = result.cryptoObject?.cipher ?: operation.cipher
+                    action(cipher)
+                } catch (e: Exception) {
+                    Log.e("BiometricKey", "Protected cipher execution failed", e)
+                    finish(operation, null, "failed", "Android authentication did not complete the protected cipher operation. Use your vault password/key.")
                 }
-                override fun onAuthenticationError(code: Int, message: CharSequence) {
-                    val error = when (code) { 7, 9 -> "lockout"; 11, 14 -> "not_enrolled"; 15 -> "security_update"; 21 -> "not_enabled"; 1, 12 -> "temporarily_unavailable"; 3 -> "timeout"; 5, 10, 13 -> "cancelled"; else -> "failed" }
-                    val text = when (error) {
-                        "lockout" -> "Android locked the biometric sensor. Unlock your phone with its PIN or wait, then retry."
-                        "not_enrolled" -> "Set up your fingerprint or phone screen lock in Android settings."
-                        "not_enabled" -> "Allow biometrics for apps in Android settings."
-                        "security_update" -> "Android requires a security update for this sensor."
-                        "cancelled" -> "Android authentication was cancelled. You can retry or use your vault password/key."
-                        "timeout" -> "Android authentication timed out. Please retry."
-                        else -> "Android authentication is unavailable. Retry or use your vault password/key."
-                    }
-                    finish(operation, null, error, text, code)
+            }
+            override fun onAuthenticationError(code: Int, message: CharSequence) {
+                val error = when (code) { 7, 9 -> "lockout"; 11, 14 -> "not_enrolled"; 15 -> "security_update"; 21 -> "not_enabled"; 1, 12 -> "temporarily_unavailable"; 3 -> "timeout"; 5, 10, 13 -> "cancelled"; else -> "failed" }
+                val text = when (error) {
+                    "lockout" -> "Android locked the biometric sensor. Unlock your phone with its PIN or wait, then retry."
+                    "not_enrolled" -> "Set up your fingerprint or phone screen lock in Android settings."
+                    "not_enabled" -> "Allow biometrics for apps in Android settings."
+                    "security_update" -> "Android requires a security update for this sensor."
+                    "cancelled" -> "Android authentication was cancelled. You can retry or use your vault password/key."
+                    "timeout" -> "Android authentication timed out. Please retry."
+                    else -> "Android authentication is unavailable. Retry or use your vault password/key."
                 }
-            })
+                finish(operation, null, error, text, code)
+            }
+        }
+
+        val prompt = builder.build()
+        if (operation.cipher != null && !deviceLock) {
+            prompt.authenticate(BiometricPrompt.CryptoObject(operation.cipher), operation.signal, activity.mainExecutor, promptCallback)
+        } else {
+            prompt.authenticate(operation.signal, activity.mainExecutor, promptCallback)
+        }
     }
     private fun finish(operation: Operation, value: ByteArray?, error: String?, message: String = "Android authentication was cancelled.", androidCode: Int? = null) {
         if (pending !== operation) return // Stale callbacks cannot finish a newer prompt.

@@ -41,6 +41,7 @@ class _EntryEditorState extends State<EntryEditor> {
     String label, {
     bool secret = false,
     int lines = 1,
+    IconData? prefixIcon,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: VField(
@@ -49,6 +50,7 @@ class _EntryEditorState extends State<EntryEditor> {
       secret: secret,
       maxLines: lines,
       touch: widget.touch,
+      prefixIcon: prefixIcon,
     ),
   );
   Future<void> attach() async {
@@ -68,7 +70,7 @@ class _EntryEditorState extends State<EntryEditor> {
           final n = await showDialog<String>(
             context: context,
             builder: (_) => AlertDialog(
-              title: const Text('Attachment filename'),
+              title: dialogTitle('Attachment filename', Icons.attach_file),
               content: VField(
                 controller: name,
                 label: 'Filename to save later',
@@ -151,7 +153,10 @@ class _EntryEditorState extends State<EntryEditor> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.entry == null ? 'Add item' : 'Edit item'),
+    title: dialogTitle(
+      widget.entry == null ? 'Add item' : 'Edit item',
+      widget.entry == null ? Icons.add_circle_outline : Icons.edit_outlined,
+    ),
     content: SizedBox(
       width: 580,
       child: SingleChildScrollView(
@@ -159,7 +164,7 @@ class _EntryEditorState extends State<EntryEditor> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            field(title, 'Title'),
+            field(title, 'Title', prefixIcon: Icons.label_outline),
             SegmentedButton<EntryKind>(
               segments: const [
                 ButtonSegment(value: EntryKind.login, label: Text('Login')),
@@ -176,9 +181,10 @@ class _EntryEditorState extends State<EntryEditor> {
               ExpansionTile(
                 initiallyExpanded: true,
                 title: const Text('Credentials'),
+                leading: const Icon(Icons.key_outlined, size: 20, color: accent),
                 children: [
-                  field(username, 'Email / username'),
-                  field(password, 'Password', secret: true),
+                  field(username, 'Email / username', prefixIcon: Icons.person_outline),
+                  field(password, 'Password', secret: true, prefixIcon: Icons.lock_outline),
                   TextButton.icon(
                     onPressed: () {
                       password.text = generatePassword();
@@ -187,22 +193,28 @@ class _EntryEditorState extends State<EntryEditor> {
                     icon: const Icon(Icons.auto_awesome),
                     label: const Text('Generate 24-character password'),
                   ),
-                  field(url, 'Website URL (HTTPS for autofill)'),
+                  field(url, 'Website URL (HTTPS for autofill)', prefixIcon: Icons.language),
                 ],
               ),
             ExpansionTile(
               initiallyExpanded: kind == EntryKind.note,
               title: const Text('Notes'),
+              leading: const Icon(Icons.notes_outlined, size: 20, color: noteColor),
               children: [field(notes, 'Secure notes', lines: 5)],
             ),
             ExpansionTile(
               title: const Text('Authenticator'),
+              leading: const Icon(Icons.timer_outlined, size: 20, color: accent),
               subtitle: Text(
                 totp.text.isEmpty ? 'Optional offline TOTP' : 'TOTP configured',
+                style: TextStyle(
+                  color: totp.text.isEmpty ? dimText : successColor,
+                  fontSize: 12,
+                ),
               ),
               children: [
-                const Text(
-                  'Store a Base32 secret or otpauth://totp URI. This app does not scan QR codes in this release.',
+                const InfoBox(
+                  text: 'Store a Base32 secret or otpauth://totp URI. This app does not scan QR codes in this release.',
                 ),
                 const SizedBox(height: 12),
                 field(totp, 'TOTP secret / otpauth URI', secret: true),
@@ -210,18 +222,21 @@ class _EntryEditorState extends State<EntryEditor> {
             ),
             ExpansionTile(
               title: Text('Encrypted attachments (${attachments.length})'),
+              leading: const Icon(Icons.attach_file, size: 20, color: accent),
               children: [
-                const Text(
-                  'Maximum 2 MiB per file, ten files per item, 8 MiB total per vault. Saved attachments leave the encrypted vault.',
+                const InfoBox(
+                  text: 'Maximum 2 MiB per file, ten files per item, 8 MiB total per vault. Saved attachments leave the encrypted vault.',
                 ),
+                const SizedBox(height: 8),
                 ...attachments.map(
                   (a) => ListTile(
                     title: Text(a.name),
-                    subtitle: Text('${a.byteLength} bytes'),
+                    subtitle: Text('${a.byteLength} bytes',
+                        style: const TextStyle(color: dimText, fontSize: 12)),
                     trailing: IconButton(
                       tooltip: 'Remove attachment',
                       onPressed: () => setState(() => attachments.remove(a)),
-                      icon: const Icon(Icons.delete_outline),
+                      icon: const Icon(Icons.delete_outline, color: dangerColor),
                     ),
                   ),
                 ),
@@ -235,6 +250,7 @@ class _EntryEditorState extends State<EntryEditor> {
             if (widget.integrations.isAndroid)
               ExpansionTile(
                 title: const Text('Android app binding'),
+                leading: const Icon(Icons.android, size: 20, color: successColor),
                 children: [
                   VField(
                     controller: package,
@@ -264,6 +280,10 @@ class _EntryEditorState extends State<EntryEditor> {
                     certs.isEmpty
                         ? 'No trusted app bound. Native app autofill will be refused.'
                         : '${certs.length} certificate(s) pinned for this app.',
+                    style: TextStyle(
+                      color: certs.isEmpty ? dimText : successColor,
+                      fontSize: 13,
+                    ),
                   ),
                 ],
               ),
@@ -272,9 +292,30 @@ class _EntryEditorState extends State<EntryEditor> {
               value: favorite,
               onChanged: (v) => setState(() => favorite = v ?? false),
               title: const Text('Favorite'),
+              secondary: Icon(
+                favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+                color: favorite ? accent : dimText,
+              ),
             ),
             if (error != null)
-              Text(error!, style: const TextStyle(color: Colors.orange)),
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: dangerColor.withAlpha(20),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: dangerColor.withAlpha(50)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: dangerColor, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(error!, style: const TextStyle(color: dangerColor, fontSize: 13)),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -331,31 +372,48 @@ class _EntryDetailsState extends State<EntryDetails> {
     super.dispose();
   }
 
-  Widget copyRow(String label, String text, {bool secret = false}) => ListTile(
-    contentPadding: EdgeInsets.zero,
-    title: Text(label),
-    subtitle: Text(secret && !revealed ? '••••••••••••' : text),
-    trailing: Wrap(
-      children: [
-        if (secret)
-          IconButton(
-            tooltip: revealed ? 'Hide password' : 'Reveal for 20 seconds',
-            onPressed: reveal,
-            icon: Icon(revealed ? Icons.visibility_off : Icons.visibility),
-          ),
-        IconButton(
-          tooltip: 'Copy $label',
-          onPressed: () => widget.copy(text),
-          icon: const Icon(Icons.copy),
+  Widget copyRow(String label, String text, {bool secret = false}) => Container(
+    margin: const EdgeInsets.only(bottom: 2),
+    child: ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label,
+          style: const TextStyle(fontSize: 12, color: dimText, letterSpacing: 0.5)),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          secret && !revealed ? '••••••••••••' : text,
+          style: const TextStyle(fontSize: 15),
         ),
-      ],
+      ),
+      trailing: Wrap(
+        children: [
+          if (secret)
+            IconButton(
+              tooltip: revealed ? 'Hide password' : 'Reveal for 20 seconds',
+              onPressed: reveal,
+              icon: Icon(
+                revealed ? Icons.visibility_off : Icons.visibility,
+                color: dimText,
+              ),
+            ),
+          IconButton(
+            tooltip: 'Copy $label',
+            onPressed: () => widget.copy(text),
+            icon: const Icon(Icons.copy),
+          ),
+        ],
+      ),
     ),
   );
   @override
   Widget build(BuildContext context) {
     final e = widget.entry;
     return AlertDialog(
-      title: Text(e.title),
+      title: dialogTitle(
+        e.title,
+        e.kind == EntryKind.note ? Icons.notes_outlined : Icons.key_outlined,
+        color: e.kind == EntryKind.note ? noteColor : accent,
+      ),
       content: SizedBox(
         width: 540,
         child: SingleChildScrollView(
@@ -368,15 +426,34 @@ class _EntryDetailsState extends State<EntryDetails> {
                 copyRow('Password', e.password, secret: true),
               if (e.url.isNotEmpty) copyRow('Website', e.url),
               if (e.notes.isNotEmpty) copyRow('Notes', e.notes),
-              if (e.totp.isNotEmpty) OtpCard(entry: e, copy: widget.copy),
+              if (e.totp.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                OtpCard(entry: e, copy: widget.copy),
+              ],
               if (e.attachments.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text('Attachments • exporting saves plaintext'),
+                Row(
+                  children: [
+                    Text('Attachments',
+                        style: TextStyle(fontSize: 12, color: dimText, letterSpacing: 0.5)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: surface,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text('exporting saves plaintext',
+                          style: TextStyle(fontSize: 11, color: dimText)),
+                    ),
+                  ],
+                ),
                 ...e.attachments.map(
                   (a) => ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(a.name),
-                    subtitle: Text('${a.byteLength} bytes'),
+                    subtitle: Text('${a.byteLength} bytes',
+                        style: const TextStyle(color: dimText, fontSize: 12)),
                     trailing: IconButton(
                       tooltip: 'Save attachment',
                       onPressed: () => widget.save(a),
@@ -388,19 +465,24 @@ class _EntryDetailsState extends State<EntryDetails> {
               if (e.history.isNotEmpty)
                 ExpansionTile(
                   title: Text('Password history (${e.history.length})'),
+                  leading: const Icon(Icons.history, size: 20, color: dimText),
                   onExpansionChanged: (v) => setState(() => history = v),
                   children: history
                       ? e.history
                             .map(
                               (v) => ListTile(
-                                title: Text(v.changedAt.toLocal().toString()),
+                                title: Text(
+                                  v.changedAt.toLocal().toString(),
+                                  style: const TextStyle(fontSize: 13),
+                                ),
                                 subtitle: const Text(
                                   'Previous password • copy only',
+                                  style: TextStyle(color: dimText, fontSize: 12),
                                 ),
                                 trailing: IconButton(
                                   tooltip: 'Copy previous password',
                                   onPressed: () => widget.copy(v.password),
-                                  icon: const Icon(Icons.copy),
+                                  icon: const Icon(Icons.copy, size: 18),
                                 ),
                               ),
                             )
@@ -408,16 +490,26 @@ class _EntryDetailsState extends State<EntryDetails> {
                       : [],
                 ),
               const SizedBox(height: 12),
-              Text(
-                'Updated ${e.updatedAt.toLocal()}',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: surface,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Updated ${e.updatedAt.toLocal()}',
+                  style: const TextStyle(fontSize: 12, color: dimText),
+                ),
               ),
             ],
           ),
         ),
       ),
       actions: [
-        TextButton(onPressed: widget.remove, child: const Text('Delete')),
+        TextButton(
+          onPressed: widget.remove,
+          child: const Text('Delete', style: TextStyle(color: dangerColor)),
+        ),
         TextButton(onPressed: widget.edit, child: const Text('Edit')),
         FilledButton(
           onPressed: () => Navigator.pop(context),

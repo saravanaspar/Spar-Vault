@@ -13,11 +13,13 @@ import 'platform/local_store.dart';
 import 'platform/integrations.dart';
 import 'platform/transfer.dart';
 import 'platform/bridge.dart';
+import 'platform/picker_options.dart';
 import 'ui/entry_editor.dart';
 import 'ui/widgets.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  warmupLinuxWindowId();
   FlutterError.onError = (_) =>
       debugPrint('Spar Vault: UI error (details redacted).');
   PlatformDispatcher.instance.onError = (error, stack) {
@@ -27,9 +29,7 @@ void main() {
   runApp(const SparVaultApp());
 }
 
-const ink = Color(0xFF12141B),
-    panel = Color(0xFF1D202A),
-    accent = Color(0xFFE0BB83);
+
 
 class SparVaultApp extends StatelessWidget {
   const SparVaultApp({super.key, this.store, this.now, this.integrations});
@@ -53,10 +53,85 @@ class SparVaultApp extends StatelessWidget {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF171A23),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        fillColor: surface,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: borderSubtle),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: borderSubtle),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: accent, width: 1.5),
+        ),
+        labelStyle: const TextStyle(color: dimText),
       ),
-      cardTheme: const CardThemeData(color: panel, elevation: 0),
+      cardTheme: CardThemeData(
+        color: panel,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: borderSubtle),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: panel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: panel,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      dividerTheme: const DividerThemeData(color: borderSubtle),
+      chipTheme: ChipThemeData(
+        backgroundColor: surface,
+        selectedColor: accentDim,
+        side: const BorderSide(color: borderSubtle),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        labelStyle: const TextStyle(color: dimText, fontSize: 13),
+      ),
+      navigationRailTheme: const NavigationRailThemeData(
+        backgroundColor: panel,
+        indicatorColor: accentDim,
+        selectedIconTheme: IconThemeData(color: accent),
+        unselectedIconTheme: IconThemeData(color: dimText),
+        selectedLabelTextStyle: TextStyle(
+          color: accent,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+        unselectedLabelTextStyle: TextStyle(
+          color: dimText,
+          fontSize: 12,
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: panel,
+        indicatorColor: accentDim,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const IconThemeData(color: accent);
+          }
+          return const IconThemeData(color: dimText);
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const TextStyle(color: accent, fontWeight: FontWeight.w600, fontSize: 12);
+          }
+          return const TextStyle(color: dimText, fontSize: 12);
+        }),
+      ),
     ),
     home: VaultHome(
       store: store ?? createLocalStore(),
@@ -254,10 +329,17 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     } else {
       if (privacy == null) {
         privacy = OverlayEntry(
-          builder: (_) => const ColoredBox(
+          builder: (_) => ColoredBox(
             color: ink,
             child: Center(
-              child: Icon(Icons.lock_outline, size: 48, color: accent),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.asset(
+                  'assets/branding/app_icon.png',
+                  width: 64,
+                  height: 64,
+                ),
+              ),
             ),
           ),
         );
@@ -383,7 +465,15 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
 
   void _message(String text) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.info_outline, color: accent, size: 18),
+            const SizedBox(width: 12),
+            Expanded(child: Text(text)),
+          ],
+        ),
+      ));
     }
   }
 
@@ -464,13 +554,17 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     List<String> extensions, {
     String mime = 'application/octet-stream',
   }) async {
+    final title = 'Save $name';
+    final linuxOpts = await pickerLinuxOptions(title: title);
+    ensureDialogForeground(title);
     final result = await FilePicker.saveFile(
-      dialogTitle: 'Save $name',
+      dialogTitle: title,
       fileName: name,
       type: FileType.custom,
       allowedExtensions: extensions,
       mimeType: mime,
       bytes: bytes,
+      linuxOptions: linuxOpts,
     );
     return kIsWeb || result != null;
   }
@@ -1295,16 +1389,30 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       appBar: AppBar(
         title: Row(
           children: [
-            const Icon(Icons.shield_outlined, color: accent),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/branding/app_icon.png',
+                width: 24,
+                height: 24,
+              ),
+            ),
             const SizedBox(width: 10),
             const Flexible(
               child: Text('Spar Vault', overflow: TextOverflow.ellipsis),
             ),
             if (vault.unlocked && MediaQuery.sizeOf(context).width > 600) ...[
               const SizedBox(width: 12),
-              Text(
-                'Local • encrypted',
-                style: Theme.of(context).textTheme.labelSmall,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: accentDim,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Local • encrypted',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(color: accent),
+                ),
               ),
             ],
           ],
@@ -1362,34 +1470,57 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       label: 'Settings',
     ),
   ];
-  Widget _locked() => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
-      child: ListView(
-        padding: const EdgeInsets.all(24),
-        shrinkWrap: true,
-        children: [
-          const Icon(Icons.shield_outlined, size: 60, color: accent),
-          const SizedBox(height: 16),
-          Text(
-            generated != null
-                ? 'Keep your secure key safe'
-                : vault.hasVault
-                ? 'Welcome back.'
-                : 'Your passwords. Your device.',
-            style: Theme.of(context).textTheme.headlineSmall,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 12),
+  Widget _locked() => Container(
+    decoration: BoxDecoration(
+      gradient: RadialGradient(
+        center: const Alignment(0, -0.3),
+        radius: 1.2,
+        colors: [
+          accent.withAlpha(10),
+          ink,
+        ],
+      ),
+    ),
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          shrinkWrap: true,
+          children: [
+            const Center(child: BreathingShield()),
+            const SizedBox(height: 20),
+            Text(
+              generated != null
+                  ? 'Keep your secure key safe'
+                  : vault.hasVault
+                  ? 'Welcome back.'
+                  : 'Your passwords. Your device.',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.3,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
           if (generated != null) ...[
-            const Text(
-              'This random key unlocks your vault. Save it privately. Losing all enabled unlock methods means losing access. The app cannot reset them.',
+            const InfoBox(
+              text: 'This random key unlocks your vault. Save it privately. Losing all enabled unlock methods means losing access. The app cannot reset them.',
             ),
             const SizedBox(height: 16),
-            Text(
-              generated!.display(),
-              style: const TextStyle(fontFamily: 'LocalMono', fontSize: 17),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: accent.withAlpha(40)),
+              ),
+              child: Text(
+                generated!.display(),
+                style: const TextStyle(fontFamily: 'LocalMono', fontSize: 17, letterSpacing: 1),
+              ),
             ),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               children: [
@@ -1443,8 +1574,8 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             ),
             TextButton(onPressed: _lock, child: const Text('Cancel')),
           ] else if (vault.hasVault) ...[
-            const Text(
-              'Unlock locally. Neither your credentials nor your vault are sent to a server.',
+            const InfoBox(
+              text: 'Unlock locally. Neither your credentials nor your vault are sent to a server.',
             ),
             const SizedBox(height: 20),
             if (vault.passwordEnabled)
@@ -1501,15 +1632,15 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
               child: const Text('Restore encrypted backup'),
             ),
           ] else ...[
-            const Text(
-              'An offline-first vault with no account, no recovery service and no telemetry.',
-              textAlign: TextAlign.center,
+            const InfoBox(
+              text: 'An offline-first vault with no account, no recovery service and no telemetry.',
             ),
             const SizedBox(height: 24),
             FilledButton(
               onPressed: _enroll,
               child: const Text('Create a new vault'),
             ),
+            const SizedBox(height: 8),
             TextButton(
               onPressed: () => _act(() => _restore()),
               child: const Text('Restore encrypted backup'),
@@ -1524,42 +1655,63 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             const LinearProgressIndicator(),
           ],
           const SizedBox(height: 24),
-          const Text(
-            'Encryption cannot protect an unlocked device from malware. This release needs independent security review before use for high-value secrets.',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Text(
+              'Encryption cannot protect an unlocked device from malware. This release needs independent security review before use for high-value secrets.',
+              style: TextStyle(fontSize: 12, color: dimText),
+            ),
           ),
         ],
       ),
     ),
+   ),
   );
   Widget _workspace() => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       if (MediaQuery.sizeOf(context).width >= 850)
-        NavigationRail(
-          selectedIndex: section,
-          onDestinationSelected: (s) => setState(() => section = s),
-          labelType: NavigationRailLabelType.all,
-          destinations: destinations
-              .map(
-                (d) => NavigationRailDestination(
-                  icon: d.icon,
-                  label: Text(d.label),
-                ),
-              )
-              .toList(),
+        Container(
+          decoration: const BoxDecoration(
+            border: Border(right: BorderSide(color: borderSubtle, width: 1)),
+          ),
+          child: NavigationRail(
+            selectedIndex: section,
+            onDestinationSelected: (s) => setState(() => section = s),
+            labelType: NavigationRailLabelType.all,
+            destinations: destinations
+                .map(
+                  (d) => NavigationRailDestination(
+                    icon: d.icon,
+                    label: Text(d.label),
+                  ),
+                )
+                .toList(),
+          ),
         ),
       Expanded(
         child: Stack(
           children: [
             Positioned.fill(
-              child: switch (section) {
-                0 => _vaultPage(),
-                1 => _codesPage(),
-                2 => _securityPage(),
-                3 => _backupPage(),
-                _ => _settingsPage(),
-              },
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: KeyedSubtree(
+                  key: ValueKey(section),
+                  child: switch (section) {
+                    0 => _vaultPage(),
+                    1 => _codesPage(),
+                    2 => _securityPage(),
+                    3 => _backupPage(),
+                    _ => _settingsPage(),
+                  },
+                ),
+              ),
             ),
             if (vault.busy)
               const Align(
@@ -1575,15 +1727,201 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          Text(title, style: Theme.of(context).textTheme.headlineSmall),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
           if (subtitle != null) ...[
-            const SizedBox(height: 8),
-            Text(subtitle, style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 6),
+            Text(subtitle, style: const TextStyle(color: dimText, fontSize: 13)),
           ],
           const SizedBox(height: 24),
           ...children,
         ],
       );
+
+  Widget _filterChip(int index, String label, IconData icon, int count) {
+    final selected = filter == index;
+    return FilterChip(
+      selected: selected,
+      showCheckmark: false,
+      avatar: Icon(
+        icon,
+        size: 16,
+        color: selected ? accent : dimText,
+      ),
+      label: Text('$label ($count)'),
+      labelStyle: TextStyle(
+        color: selected ? accent : dimText,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+        fontSize: 13,
+      ),
+      backgroundColor: surface,
+      selectedColor: accentDim,
+      side: BorderSide(
+        color: selected ? accent.withAlpha(90) : borderSubtle,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      onSelected: (_) => setState(() {
+        filter = index;
+        page = 0;
+      }),
+    );
+  }
+
+  Widget _vaultEntryCard(VaultEntry e) {
+    final isNote = e.kind == EntryKind.note;
+    final itemColor = isNote ? noteColor : accent;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      clipBehavior: Clip.antiAlias,
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              color: e.favorite ? Colors.amber : itemColor,
+            ),
+            Expanded(
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: itemColor.withAlpha(24),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    isNote ? Icons.notes_outlined : Icons.key_outlined,
+                    color: itemColor,
+                    size: 20,
+                  ),
+                ),
+                title: Text(
+                  e.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14.5,
+                  ),
+                ),
+                subtitle: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        e.username.isNotEmpty
+                            ? e.username
+                            : (isNote ? 'Secure Note' : 'Login'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5, color: dimText),
+                      ),
+                    ),
+                    if (e.totp.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: accentDim,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.timer_outlined,
+                              size: 11,
+                              color: accent,
+                            ),
+                            SizedBox(width: 3),
+                            Text(
+                              '2FA',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: accent,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (e.attachments.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: surface,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.attach_file,
+                              size: 11,
+                              color: dimText,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '${e.attachments.length}',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: dimText,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (e.favorite)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          Icons.star_rounded,
+                          color: Colors.amber,
+                          size: 20,
+                        ),
+                      ),
+                    if (!isNote && e.password.isNotEmpty)
+                      IconButton(
+                        tooltip: 'Copy password',
+                        icon: const Icon(Icons.copy_rounded, size: 18),
+                        style: IconButton.styleFrom(foregroundColor: dimText),
+                        onPressed: () => _copy(e.password),
+                      ),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: dimText,
+                      size: 20,
+                    ),
+                  ],
+                ),
+                onTap: () => _act(() => _details(e)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _vaultPage() {
     final query = search.text.toLowerCase();
     final entries =
@@ -1607,6 +1945,14 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     final size = vault.preferences.pageSize,
         pages = (entries.length / size).ceil().clamp(1, 2000);
     page = page.clamp(0, pages - 1);
+
+    final totalCount = vault.entries.length;
+    final loginCount =
+        vault.entries.where((e) => e.kind == EntryKind.login).length;
+    final noteCount =
+        vault.entries.where((e) => e.kind == EntryKind.note).length;
+    final favCount = vault.entries.where((e) => e.favorite).length;
+
     return _page('Your vault', [
       Wrap(
         spacing: 12,
@@ -1615,16 +1961,42 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
         children: [
           SizedBox(
             width: MediaQuery.sizeOf(context).width < 500 ? 240 : 360,
-            child: VField(
+            child: TextField(
               controller: search,
-              label: 'Search items',
-              touch: _touch,
-              onChanged: (_) => setState(() => page = 0),
+              decoration: InputDecoration(
+                labelText: 'Search items',
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  size: 20,
+                  color: dimText,
+                ),
+                suffixIcon: search.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(
+                          Icons.clear_rounded,
+                          size: 18,
+                          color: dimText,
+                        ),
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          search.clear();
+                          _touch();
+                          setState(() => page = 0);
+                        },
+                      )
+                    : null,
+              ),
+              autocorrect: false,
+              enableSuggestions: false,
+              onChanged: (_) {
+                _touch();
+                setState(() => page = 0);
+              },
             ),
           ),
           FilledButton.icon(
             onPressed: vault.busy ? null : () => _act(() => _edit()),
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.add_rounded),
             label: const Text('Add item'),
           ),
         ],
@@ -1632,164 +2004,412 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       const SizedBox(height: 16),
       Wrap(
         spacing: 8,
-        children: List.generate(
-          4,
-          (i) => ChoiceChip(
-            label: Text(['All', 'Logins', 'Notes', 'Favorites'][i]),
-            selected: filter == i,
-            onSelected: (_) => setState(() {
-              filter = i;
-              page = 0;
-            }),
-          ),
-        ),
+        children: [
+          _filterChip(0, 'All', Icons.apps_rounded, totalCount),
+          _filterChip(1, 'Logins', Icons.key_outlined, loginCount),
+          _filterChip(2, 'Notes', Icons.notes_outlined, noteCount),
+          _filterChip(3, 'Favorites', Icons.star_rounded, favCount),
+        ],
       ),
       const SizedBox(height: 16),
       if (entries.isEmpty)
-        const Card(
-          child: Padding(
-            padding: EdgeInsets.all(28),
-            child: Text('No matching items. Add a login or secure note.'),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          decoration: BoxDecoration(
+            color: panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderSubtle),
           ),
-        ),
-      ...entries
-          .skip(page * size)
-          .take(size)
-          .map(
-            (e) => Card(
-              child: ListTile(
-                leading: Icon(
-                  e.kind == EntryKind.note
-                      ? Icons.notes_outlined
-                      : Icons.key_outlined,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: const BoxDecoration(
+                  color: surface,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  vault.entries.isEmpty
+                      ? Icons.lock_open_rounded
+                      : Icons.search_off_rounded,
+                  size: 36,
                   color: accent,
                 ),
-                title: Text(
-                  e.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  e.username.isNotEmpty ? e.username : e.kind.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Icon(e.favorite ? Icons.star : Icons.chevron_right),
-                onTap: () => _act(() => _details(e)),
               ),
+              const SizedBox(height: 16),
+              Text(
+                vault.entries.isEmpty
+                    ? 'Your vault is empty'
+                    : 'No matching items found',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                vault.entries.isEmpty
+                    ? 'Add your first login credentials or secure note to get started.'
+                    : 'Try adjusting your search terms or clearing the selected filter.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: dimText, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              if (vault.entries.isEmpty)
+                FilledButton.icon(
+                  onPressed: vault.busy ? null : () => _act(() => _edit()),
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add your first item'),
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: () {
+                    search.clear();
+                    setState(() {
+                      filter = 0;
+                      page = 0;
+                    });
+                  },
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear search & filters'),
+                ),
+            ],
+          ),
+        )
+      else
+        ...entries
+            .skip(page * size)
+            .take(size)
+            .map((e) => _vaultEntryCard(e)),
+      if (entries.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: panel,
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: borderSubtle),
             ),
-          ),
-      const SizedBox(height: 12),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton(
-            tooltip: 'Previous page',
-            onPressed: page > 0 ? () => setState(() => page--) : null,
-            icon: const Icon(Icons.chevron_left),
-          ),
-          Flexible(
-            child: Text(
-              'Page ${page + 1} / $pages • ${entries.length} items',
-              textAlign: TextAlign.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Previous page',
+                  iconSize: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  onPressed: page > 0 ? () => setState(() => page--) : null,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Page ${page + 1} / $pages • ${entries.length} items',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Next page',
+                  iconSize: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  onPressed: page + 1 < pages
+                      ? () => setState(() => page++)
+                      : null,
+                  icon: const Icon(Icons.chevron_right_rounded),
+                ),
+              ],
             ),
-          ),
-          IconButton(
-            tooltip: 'Next page',
-            onPressed: page + 1 < pages ? () => setState(() => page++) : null,
-            icon: const Icon(Icons.chevron_right),
-          ),
-        ],
-      ),
-    ]);
-  }
-
-  Widget _codesPage() => _page('Authenticator codes', [
-    const Text(
-      'Codes are generated offline. Your device clock must be correct. Saving TOTP beside its password reduces separation between authentication factors.',
-    ),
-    const SizedBox(height: 16),
-    if (!vault.entries.any((e) => e.totp.isNotEmpty))
-      const Text(
-        'Add a Base32 secret or otpauth URI in an item’s Authenticator section.',
-      ),
-    ...vault.entries
-        .where((e) => e.totp.isNotEmpty)
-        .map((e) => OtpCard(entry: e, copy: _copy)),
-  ]);
-  Widget _securityPage() {
-    final h = HealthReport(vault.entries);
-    Widget group(String title, List<VaultEntry> entries) => SectionCard(
-      title: title,
-      children: [
-        if (entries.isEmpty) const Text('No matches.'),
-        ...entries.map(
-          (e) => ListTile(
-            title: Text(e.title),
-            subtitle: Text(e.username),
-            onTap: () => _act(() => _edit(e)),
           ),
         ),
       ],
+    ], subtitle: '${vault.entries.length} ${vault.entries.length == 1 ? 'item' : 'items'} saved in encrypted storage');
+  }
+
+  Widget _codesPage() {
+    final totpEntries =
+        vault.entries.where((e) => e.totp.isNotEmpty).toList();
+    return _page(
+      'Authenticator codes',
+      [
+        const InfoBox(
+          text:
+              'Codes are generated offline every 30 seconds. Your device clock must be correct. Saving TOTP beside its password reduces separation between authentication factors.',
+        ),
+        const SizedBox(height: 16),
+        if (totpEntries.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: panel,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: borderSubtle),
+            ),
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    color: surface,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.timer_off_outlined,
+                    size: 36,
+                    color: dimText,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'No authenticator codes yet',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Add a Base32 secret or otpauth URI in an item’s Authenticator section to generate 2FA verification codes.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: dimText, fontSize: 13),
+                ),
+              ],
+            ),
+          )
+        else
+          ...totpEntries.map((e) => OtpCard(entry: e, copy: _copy)),
+      ],
+      subtitle:
+          '${totpEntries.length} ${totpEntries.length == 1 ? 'code' : 'codes'} active',
     );
+  }
+  Widget _securityPage() {
+    final h = HealthReport(vault.entries);
+    final totalLogins =
+        vault.entries.where((e) => e.kind == EntryKind.login).length;
+    final totalIssues = h.short.length + h.reused.length + h.wordOnly.length;
+    final isHealthy = totalIssues == 0 && totalLogins > 0;
+
+    Widget group({
+      required String title,
+      required List<VaultEntry> entries,
+      required IconData icon,
+      required Color color,
+      required String emptyMessage,
+    }) => SectionCard(
+      title: title,
+      icon: icon,
+      accentColor: color,
+      children: [
+        if (entries.isEmpty)
+          Row(
+            children: [
+              const Icon(
+                Icons.check_circle_outline_rounded,
+                color: successColor,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                emptyMessage,
+                style: const TextStyle(color: successColor, fontSize: 13),
+              ),
+            ],
+          )
+        else
+          ...entries.map(
+            (e) => Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              color: surface,
+              child: ListTile(
+                dense: true,
+                leading: Icon(
+                  Icons.warning_amber_rounded,
+                  color: color,
+                  size: 20,
+                ),
+                title: Text(
+                  e.title,
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: Text(
+                  e.username.isNotEmpty ? e.username : 'No username',
+                  style: const TextStyle(color: dimText, fontSize: 12),
+                ),
+                trailing: const Icon(
+                  Icons.edit_outlined,
+                  size: 18,
+                  color: dimText,
+                ),
+                onTap: () => _act(() => _edit(e)),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    final backupStatusText = backupError ??
+        (lastAutomaticBackup != null
+            ? 'Automatic encrypted copy saved this session.'
+            : vault.preferences.lastBackupAt == null
+            ? 'No manual export recorded. Export and verify a backup.'
+            : 'Last manual export: ${vault.preferences.lastBackupAt!.toLocal()}');
+    final isBackupOverdue = vault.preferences.lastBackupAt == null ||
+        now.difference(vault.preferences.lastBackupAt!).inDays >=
+            vault.preferences.backupReminderDays;
+
     return _page('Security overview', [
-      const Text(
-        'These checks run entirely on this device. They are limited heuristics, not a breach check or a guarantee of password strength.',
+      Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isHealthy
+                ? successColor.withAlpha(60)
+                : (totalIssues > 0
+                    ? warningColor.withAlpha(60)
+                    : borderSubtle),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: (isHealthy
+                    ? successColor
+                    : (totalIssues > 0 ? warningColor : accent)).withAlpha(25),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isHealthy
+                    ? Icons.verified_user_rounded
+                    : (totalIssues > 0
+                        ? Icons.security_update_warning_rounded
+                        : Icons.shield_outlined),
+                size: 32,
+                color: isHealthy
+                    ? successColor
+                    : (totalIssues > 0 ? warningColor : accent),
+              ),
+            ),
+            const SizedBox(width: 18),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isHealthy
+                        ? 'All logins meet security checks'
+                        : totalLogins == 0
+                        ? 'No logins evaluated'
+                        : '$totalIssues security ${totalIssues == 1 ? 'alert' : 'alerts'} detected',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$totalLogins total accounts • ${h.short.length} short • ${h.reused.length} reused • ${h.wordOnly.length} letters-only',
+                    style: const TextStyle(color: dimText, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const InfoBox(
+        text:
+            'These checks run entirely on this device. They are limited heuristics, not a breach check or a guarantee of password strength. Use a unique, long password for each account.',
       ),
       const SizedBox(height: 16),
-      group('Short passwords (${h.short.length})', h.short),
-      group('Reused passwords (${h.reused.length})', h.reused),
-      group('Letters-only passwords (${h.wordOnly.length})', h.wordOnly),
-      const Text(
-        'Long random passphrases can be strong even if they contain only letters. Use a unique password for each account.',
+      group(
+        title: 'Short passwords (${h.short.length})',
+        entries: h.short,
+        icon: Icons.lock_clock,
+        color: dangerColor,
+        emptyMessage: 'No short passwords found (all >= 12 chars).',
       ),
-      const SizedBox(height: 20),
+      group(
+        title: 'Reused passwords (${h.reused.length})',
+        entries: h.reused,
+        icon: Icons.repeat_rounded,
+        color: warningColor,
+        emptyMessage: 'No reused passwords found.',
+      ),
+      group(
+        title: 'Letters-only passwords (${h.wordOnly.length})',
+        entries: h.wordOnly,
+        icon: Icons.text_fields_rounded,
+        color: warningColor,
+        emptyMessage: 'No letters-only passwords found.',
+      ),
       SectionCard(
         title: 'Backup status',
+        icon: Icons.backup_rounded,
+        accentColor: isBackupOverdue ? warningColor : successColor,
         children: [
-          Text(
-            backupError ??
-                (lastAutomaticBackup != null
-                    ? 'Automatic encrypted copy saved this session.'
-                    : vault.preferences.lastBackupAt == null
-                    ? 'No manual export recorded. Export and verify a backup.'
-                    : 'Last manual export: ${vault.preferences.lastBackupAt!.toLocal()}'),
+          Row(
+            children: [
+              Icon(
+                isBackupOverdue
+                    ? Icons.warning_amber_rounded
+                    : Icons.check_circle_outline_rounded,
+                color: isBackupOverdue ? warningColor : successColor,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  backupStatusText,
+                  style: TextStyle(
+                    color: isBackupOverdue ? warningColor : null,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
           ),
-          if (vault.preferences.lastBackupAt == null ||
-              now.difference(vault.preferences.lastBackupAt!).inDays >=
-                  vault.preferences.backupReminderDays)
+          if (isBackupOverdue) ...[
+            const SizedBox(height: 10),
             const Text(
               'Backup reminder: export an independent copy and verify it.',
+              style: TextStyle(fontSize: 12, color: dimText),
             ),
+          ],
         ],
       ),
-    ]);
+    ], subtitle: 'Offline heuristic checks for password health and backup freshness');
   }
 
   Widget _backupPage() => _page('Backups & transfers', [
     SectionCard(
       title: 'Encrypted backups',
+      icon: Icons.shield_outlined,
+      accentColor: accent,
       children: [
-        const Text(
-          'A backup is the .svlt file containing encrypted entries. A master-key .txt file alone has no passwords to restore.',
+        const InfoBox(
+          text:
+              'A backup is the .svlt file containing your encrypted entries. A master-key .txt file alone has no passwords to restore.',
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 10,
+          runSpacing: 10,
           children: [
             FilledButton.icon(
               onPressed: () => _act(_exportBackup),
-              icon: const Icon(Icons.download),
+              icon: const Icon(Icons.download_rounded),
               label: const Text('Export backup'),
             ),
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: () => _act(() => _restore(verifyOnly: true)),
-              child: const Text('Verify backup'),
+              icon: const Icon(Icons.verified_outlined),
+              label: const Text('Verify backup'),
             ),
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: () => _act(() => _restore()),
-              child: const Text('Restore backup'),
+              icon: const Icon(Icons.restore_page_outlined),
+              label: const Text('Restore backup'),
             ),
           ],
         ),
@@ -1797,29 +2417,66 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     ),
     SectionCard(
       title: 'Automatic encrypted copies',
+      icon: Icons.auto_mode_rounded,
+      accentColor: successColor,
       children: [
-        if (vault.preferences.backupDirectory == 'browser-storage')
-          TextButton(
-            onPressed: () => _act(_localBackupCopies),
-            child: const Text('Review browser backup copies'),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: vault.preferences.backupEnabled
+                  ? successColor.withAlpha(50)
+                  : borderSubtle,
+            ),
           ),
-        Text(
-          vault.preferences.backupEnabled
-              ? 'Enabled • keeps the latest five copies for this vault.'
-              : 'Disabled. Choose a private folder to enable.',
+          child: Row(
+            children: [
+              Icon(
+                vault.preferences.backupEnabled
+                    ? Icons.check_circle_rounded
+                    : Icons.pause_circle_outline_rounded,
+                color: vault.preferences.backupEnabled ? successColor : dimText,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  vault.preferences.backupEnabled
+                      ? 'Automatic backups enabled • retains the latest 5 encrypted copies for this vault.'
+                      : 'Automatic backups disabled. Select a private folder to enable.',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
         ),
-        if (backupError != null)
-          Text(backupError!, style: const TextStyle(color: Colors.orange)),
-        if (vault.preferences.backupDirectory == 'browser-storage')
-          const Text(
-            'Browser copies share the same storage failure risk. Export independent backups.',
+        if (backupError != null) ...[
+          const SizedBox(height: 10),
+          Text(backupError!, style: const TextStyle(color: warningColor, fontSize: 13)),
+        ],
+        if (vault.preferences.backupDirectory == 'browser-storage') ...[
+          const SizedBox(height: 10),
+          const InfoBox(
+            text:
+                'Browser copies share the same storage failure risk as the main database. Export independent backups periodically.',
           ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => _act(_localBackupCopies),
+            icon: const Icon(Icons.folder_open_rounded, size: 18),
+            label: const Text('Review browser backup copies'),
+          ),
+        ],
+        const SizedBox(height: 14),
         Wrap(
-          spacing: 8,
+          spacing: 10,
           children: [
-            TextButton(
+            OutlinedButton.icon(
               onPressed: () => _act(_chooseAutomaticBackup),
-              child: const Text('Choose backup folder'),
+              icon: const Icon(Icons.folder_rounded, size: 18),
+              label: const Text('Choose backup folder'),
             ),
             if (vault.preferences.backupEnabled)
               TextButton(
@@ -1832,10 +2489,16 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
               ),
           ],
         ),
+        const SizedBox(height: 14),
         DropdownButtonFormField<int>(
           initialValue: vault.preferences.backupReminderDays,
           decoration: const InputDecoration(
             labelText: 'Independent backup reminder',
+            prefixIcon: Icon(
+              Icons.notifications_active_outlined,
+              size: 20,
+              color: dimText,
+            ),
           ),
           items: [1, 3, 7, 14, 30]
               .map(
@@ -1852,46 +2515,63 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     ),
     SectionCard(
       title: 'Paired device transfer',
+      icon: Icons.sync_alt_rounded,
+      accentColor: noteColor,
       children: [
-        const Text(
-          'Transfers are authenticated and encrypted with a five-minute private code. They move an encrypted vault snapshot, never your secure key. Receiving a matching vault shows additions, conflicts and deletions before merging.',
+        const InfoBox(
+          text:
+              'Transfers are authenticated and encrypted with a 5-minute private code. They move an encrypted vault snapshot, never your secure key. Receiving a matching vault shows additions, conflicts, and deletions before merging.',
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 10,
+          runSpacing: 10,
           children: [
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: () => _act(() => _sendTransfer()),
-              child: const Text('Send transfer file'),
+              icon: const Icon(Icons.upload_file_rounded),
+              label: const Text('Send transfer file'),
             ),
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: () => _act(() => _receiveTransfer()),
-              child: const Text('Receive transfer file'),
+              icon: const Icon(Icons.file_download_rounded),
+              label: const Text('Receive transfer file'),
             ),
             if (transfer.canHost) ...[
-              OutlinedButton(
+              OutlinedButton.icon(
                 onPressed: () => _act(() => _sendTransfer(lan: true)),
-                child: const Text('Send over local network'),
+                icon: const Icon(Icons.wifi_rounded),
+                label: const Text('Send over local network'),
               ),
-              OutlinedButton(
+              OutlinedButton.icon(
                 onPressed: () => _act(() => _receiveTransfer(lan: true)),
-                child: const Text('Receive over local network'),
+                icon: const Icon(Icons.wifi_find_rounded),
+                label: const Text('Receive over local network'),
               ),
             ],
           ],
         ),
       ],
     ),
-  ]);
+  ], subtitle: 'Manage encrypted archives and device synchronization');
+
   Widget _settingsPage() => _page('Settings', [
     SectionCard(
       title: 'Session & layout',
+      icon: Icons.timer_outlined,
+      accentColor: accent,
       children: [
         DropdownButtonFormField<int>(
           key: ValueKey('idle-${vault.preferences.idleMinutes}'),
           initialValue: vault.preferences.idleMinutes,
-          decoration: const InputDecoration(labelText: 'Lock after inactivity'),
+          decoration: const InputDecoration(
+            labelText: 'Lock after inactivity',
+            prefixIcon: Icon(
+              Icons.hourglass_empty_rounded,
+              size: 20,
+              color: dimText,
+            ),
+          ),
           items: [1, 2, 5, 10, 15, 30]
               .map((n) => DropdownMenuItem(value: n, child: Text('$n minutes')))
               .toList(),
@@ -1902,11 +2582,13 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             _touch();
           }),
         ),
+        const SizedBox(height: 12),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text('Lock immediately when minimized'),
           subtitle: const Text(
-            'Off: switching apps keeps the session until its inactivity deadline.',
+            'Off: switching apps keeps the session active until its inactivity deadline.',
+            style: TextStyle(fontSize: 12, color: dimText),
           ),
           value: vault.preferences.lockOnBackground,
           onChanged: (v) => _act(
@@ -1915,9 +2597,17 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             ),
           ),
         ),
+        const SizedBox(height: 12),
         DropdownButtonFormField<int>(
           initialValue: vault.preferences.pageSize,
-          decoration: const InputDecoration(labelText: 'Items per page'),
+          decoration: const InputDecoration(
+            labelText: 'Items per page',
+            prefixIcon: Icon(
+              Icons.format_list_numbered_rounded,
+              size: 20,
+              color: dimText,
+            ),
+          ),
           items: [10, 20, 50]
               .map((n) => DropdownMenuItem(value: n, child: Text('$n items')))
               .toList(),
@@ -1931,23 +2621,62 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     ),
     SectionCard(
       title: 'Unlock methods',
+      icon: Icons.key_rounded,
+      accentColor: accent,
       children: [
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(
-            vault.passwordEnabled
-                ? 'Password unlock enabled'
-                : 'Secure key unlock',
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(12),
           ),
-          subtitle: const Text(
-            'The random secure key always remains an unlock method. No server reset exists.',
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: accentDim,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  vault.passwordEnabled
+                      ? Icons.password_rounded
+                      : Icons.key_rounded,
+                  color: accent,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      vault.passwordEnabled
+                          ? 'Password & Secure Key active'
+                          : 'Secure Key only',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'The random secure key always remains an unlock method. No server reset exists.',
+                      style: TextStyle(color: dimText, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          trailing: const Icon(Icons.password),
         ),
+        const SizedBox(height: 14),
         Wrap(
           spacing: 8,
+          runSpacing: 8,
           children: [
-            TextButton(
+            FilledButton.tonal(
               onPressed: () => _act(_passwordSettings),
               child: Text(
                 vault.passwordEnabled
@@ -1956,7 +2685,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
               ),
             ),
             if (vault.passwordEnabled)
-              TextButton(
+              OutlinedButton(
                 onPressed: () => _act(() async {
                   if (await _confirm(
                     'Remove password unlock?',
@@ -1968,110 +2697,166 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                 }),
                 child: const Text('Remove password unlock'),
               ),
-            TextButton(
+            OutlinedButton(
               onPressed: () => _act(_rotate),
               child: const Text('Rotate secure key'),
             ),
           ],
         ),
-        if (integrations.isAndroid)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        if (integrations.isAndroid) ...[
+          const SizedBox(height: 18),
+          const Divider(),
+          const SizedBox(height: 12),
+          Text(
+            deviceSecurity.explanation(false),
+            style: const TextStyle(fontSize: 13, color: dimText),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              Text(deviceSecurity.explanation(false)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  TextButton.icon(
-                    onPressed: authenticationPending
-                        ? null
-                        : () => _act(_enableBiometrics),
-                    icon: const Icon(Icons.fingerprint),
-                    label: const Text('Enable biometric unlock'),
-                  ),
-                  if (biometricReady)
-                    TextButton(
-                      onPressed: authenticationPending
-                          ? null
-                          : () => _act(() async {
-                              await integrations.clearBiometric();
-                              await _biometricState();
-                              setState(() {});
-                            }),
-                      child: const Text('Remove biometric unlock'),
-                    ),
-                  TextButton.icon(
-                    onPressed: authenticationPending
-                        ? null
-                        : () => _act(() => _enableBiometrics(deviceLock: true)),
-                    icon: const Icon(Icons.phonelink_lock),
-                    label: Text(
-                      deviceUnlockReady
-                          ? 'Replace Phone screen lock binding'
-                          : 'Enable Phone screen lock',
-                    ),
-                  ),
-                  if (deviceUnlockReady)
-                    TextButton(
-                      onPressed: authenticationPending
-                          ? null
-                          : () => _act(() async {
-                              await integrations.clearDeviceUnlock();
-                              await _refreshDeviceSecurity();
-                            }),
-                      child: const Text('Remove Phone screen lock'),
-                    ),
-                ],
+              FilledButton.tonalIcon(
+                onPressed: authenticationPending
+                    ? null
+                    : () => _act(_enableBiometrics),
+                icon: const Icon(Icons.fingerprint),
+                label: const Text('Enable biometric unlock'),
               ),
-              const Text(
-                'Phone screen lock uses Android’s fingerprint or PIN/pattern/password prompt. It is local to this phone and is not a synced passkey.',
+              if (biometricReady)
+                OutlinedButton(
+                  onPressed: authenticationPending
+                      ? null
+                      : () => _act(() async {
+                          await integrations.clearBiometric();
+                          await _biometricState();
+                          setState(() {});
+                        }),
+                  child: const Text('Remove biometric unlock'),
+                ),
+              FilledButton.tonalIcon(
+                onPressed: authenticationPending
+                    ? null
+                    : () => _act(() => _enableBiometrics(deviceLock: true)),
+                icon: const Icon(Icons.phonelink_lock),
+                label: Text(
+                  deviceUnlockReady
+                      ? 'Replace Phone screen lock binding'
+                      : 'Enable Phone screen lock',
+                ),
               ),
-              if (integrationError != null) Text(integrationError!),
-              TextButton(
-                onPressed: () => _act(_refreshDeviceSecurity),
-                child: const Text('Refresh Android status'),
-              ),
+              if (deviceUnlockReady)
+                OutlinedButton(
+                  onPressed: authenticationPending
+                      ? null
+                      : () => _act(() async {
+                          await integrations.clearDeviceUnlock();
+                          await _refreshDeviceSecurity();
+                        }),
+                  child: const Text('Remove Phone screen lock'),
+                ),
             ],
           ),
+          const SizedBox(height: 8),
+          const Text(
+            'Phone screen lock uses Android’s fingerprint or PIN/pattern/password prompt. It is local to this phone and is not a synced passkey.',
+            style: TextStyle(fontSize: 12, color: dimText),
+          ),
+          if (integrationError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              integrationError!,
+              style: const TextStyle(color: dangerColor, fontSize: 13),
+            ),
+          ],
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () => _act(_refreshDeviceSecurity),
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Refresh Android status'),
+          ),
+        ],
       ],
     ),
     SectionCard(
       title: 'Autofill integration',
+      icon: Icons.extension_outlined,
+      accentColor: noteColor,
       children: [
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: vault.preferences.autofillEnabled,
           title: const Text('Allow confirmed autofill while unlocked'),
           subtitle: const Text(
-            'Never fills while the vault is locked. Each request requires approval.',
+            'Never fills while the vault is locked. Each request requires explicit approval.',
+            style: TextStyle(fontSize: 12, color: dimText),
           ),
           onChanged: (v) => _act(() => _setAutofill(v)),
         ),
+        const SizedBox(height: 12),
         if (integrations.isAndroid) ...[
-          Text(
-            deviceSecurity.autofillSelected
-                ? 'Android service: Spar Vault selected'
-                : 'Android service: Spar Vault not selected — setup required',
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: deviceSecurity.autofillSelected
+                    ? successColor.withAlpha(50)
+                    : warningColor.withAlpha(50),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  deviceSecurity.autofillSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.info_outline_rounded,
+                  color: deviceSecurity.autofillSelected
+                      ? successColor
+                      : warningColor,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    deviceSecurity.autofillSelected
+                        ? 'Android service: Spar Vault selected'
+                        : 'Android service: Spar Vault not selected — setup required',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
           ),
           if (vault.preferences.autofillEnabled &&
-              !deviceSecurity.autofillSelected)
+              !deviceSecurity.autofillSelected) ...[
+            const SizedBox(height: 8),
             const Text(
               'Autofill is paused. Tap the settings button below to enable Spar Vault again.',
+              style: TextStyle(color: warningColor, fontSize: 13),
             ),
-          const Text(
-            'Bind native apps to their installed signing certificates in each item. Android website autofill is refused because its form API omits the port. Use native app bindings; desktop/web website fill uses the bundled extension.',
+          ],
+          const SizedBox(height: 8),
+          const InfoBox(
+            text:
+                'Bind native apps to their installed signing certificates in each item. Android website autofill is refused because its form API omits the port. Use native app bindings; desktop/web website fill uses the bundled extension.',
           ),
-          TextButton(
+          const SizedBox(height: 12),
+          FilledButton.tonal(
             onPressed: () => _act(_autofillSettings),
             child: const Text('Select Spar Vault in Android autofill settings'),
           ),
         ],
         if (!integrations.isAndroid) ...[
-          const Text(
-            'Install the bundled Chrome/Edge extension. Configure its 32-letter extension ID here. Native desktop also needs the bundled native messaging host; web mode needs this vault tab open.',
+          const InfoBox(
+            text:
+                'Install the bundled Chrome/Edge extension. Configure its 32-letter extension ID here. Native desktop also needs the bundled native messaging host; web mode needs this vault tab open.',
           ),
-          TextButton(
+          const SizedBox(height: 12),
+          FilledButton.tonalIcon(
+            icon: const Icon(Icons.settings_outlined, size: 18),
+            label: const Text('Configure browser extension ID'),
             onPressed: () => _act(() async {
               final c = TextEditingController(
                 text: vault.preferences.desktopExtensionId,
@@ -2079,7 +2864,10 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
               try {
                 final ok = await _dialog<bool>(
                   AlertDialog(
-                    title: const Text('Browser extension ID'),
+                    title: dialogTitle(
+                      'Browser extension ID',
+                      Icons.extension_outlined,
+                    ),
                     content: VField(
                       controller: c,
                       label: '32-letter extension ID',
@@ -2108,19 +2896,42 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                 c.dispose();
               }
             }),
-            child: const Text('Configure extension ID'),
           ),
-          if (bridge.statePath != null)
+          if (bridge.statePath != null) ...[
+            const SizedBox(height: 10),
             SelectableText(
               'Native host state file: ${bridge.statePath}',
-              style: const TextStyle(fontSize: 12),
+              style: const TextStyle(fontSize: 12, color: dimText),
             ),
+          ],
         ],
       ],
     ),
-    const Text(
-      'Spar Vault 0.2 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
-      style: TextStyle(fontSize: 12, color: Colors.grey),
+    const SizedBox(height: 12),
+    Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.asset(
+              'assets/branding/app_icon.png',
+              width: 48,
+              height: 48,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Spar Vault 0.2 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
+            style: TextStyle(fontSize: 12, color: dimText, height: 1.5),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     ),
-  ]);
+  ], subtitle: 'Application preferences, unlock credentials, and integrations');
 }
