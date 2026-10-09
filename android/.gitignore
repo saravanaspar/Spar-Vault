@@ -1,0 +1,31 @@
+# Flutter regenerates the Gradle launcher and wrapper as needed.
+gradle-wrapper.jar
+/gradlew
+/gradlew.bat
+
+# Gradle / Kotlin / Android native build state.
+.gradle/
+.kotlin/
+/captures/
+.cxx/
+.externalNativeBuild/
+/build/
+/app/build/
+/app/debug/
+/app/profile/
+/app/release/
+
+# This machine's SDK paths and generated Flutter plugin registration.
+/local.properties
+/local.properties.*
+!/local.properties.example
+GeneratedPluginRegistrant.java
+
+# Signing credentials must remain local.
+key.properties
+keystore.properties
+signing.properties
+**/*.keystore
+**/*.jks
+**/*.p12
+**/*.pfx

@@ -1,0 +1,11 @@
+name: vault_core
+description: Local encrypted vault protocol for Spar Vault.
+version: 0.2.0
+publish_to: none
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+dependencies:
+  cryptography: 2.9.0
+dev_dependencies:
+  test: ^1.25.8
+  lints: ^5.0.0

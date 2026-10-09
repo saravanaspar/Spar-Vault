@@ -1,0 +1,130 @@
+# Flutter / Dart / Pub: applies to the app and packages/vault_core.
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.widget_preview/
+app.*.symbols
+app.*.map.json
+
+# Keep both pubspec.lock files: this application pins its dependencies.
+# Keep source, test fixtures, bundled fonts, web/ and browser/extension/.
+
+# Node tooling used by browser smoke checks.
+node_modules/
+.npm/
+.pnpm-store/
+
+# Python native-host tooling and local virtual environments.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Local environment values. Commit templates with placeholders only.
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# Private vaults, automatic backups, transfers and exported master keys.
+*.svlt
+*.svlt.*
+*.SVLT
+*.SVLT.*
+*.svx
+*.svx.*
+*.SVX
+*.SVX.*
+*master-key*.txt
+*master_key*.txt
+*MasterKey*.txt
+*secure-key*.txt
+*secure_key*.txt
+/backups/
+/vault-data/
+/private/
+
+# Native browser bridge state contains a short-lived session token.
+bridge.json
+bridge.json.*
+
+# Signing credentials and private key material, on any platform.
+key.properties
+keystore.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
+
+# Packaged builds and root-level source-patch archives.
+dist/
+*.apk
+*.aab
+*.exe
+*.msi
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+*.AppImage
+*.deb
+*.rpm
+*.dmg
+*.pkg
+/*.zip
+/spar_native_host.spec
+/host.spec
+
+# Logs, test output and temporary files.
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+test-results/
+playwright-report/
+.build/
+.buildlog/
+migrate_working_dir/
+
+# Editor / OS local state. Shared VS Code launch/tasks remain trackable.
+*.class
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+.idea/
+.atom/
+.history/
+.svn/
+.swiftpm/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Android Studio build exports; platform .gitignore files handle OS specifics.
+/android/app/debug/
+/android/app/profile/
+/android/app/release/

@@ -1,0 +1,18 @@
+# Local native-host configuration / installed manifest, not extension source.
+/host-config.json
+/host-config.json.*
+/com.bnstechsystems.spar_vault.json
+
+# Locally packaged native host and PyInstaller output.
+/spar_native_host
+/spar_native_host.exe
+/spar_native_host.spec
+/host.spec
+/build/
+/dist/
+
+# Python caches and virtual environments.
+__pycache__/
+*.py[cod]
+.venv/
+venv/

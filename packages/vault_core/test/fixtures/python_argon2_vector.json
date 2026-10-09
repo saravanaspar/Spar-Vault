@@ -1,0 +1,9 @@
+{
+  "password": "independent synthetic argon2 fixture",
+  "saltHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "memoryKiB": 19456,
+  "iterations": 2,
+  "parallelism": 1,
+  "hashHex": "5e4dbf740a87973cb00702b8e774033246d3039985d08215540569f240bb5488",
+  "generator": "libargon2 reference implementation, invoked from Python ctypes"
+}
