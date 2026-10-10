@@ -176,7 +176,7 @@ def publish(root=ROOT):
     sums.write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in files))
     notes = output / "release-notes.txt"
     android_note = (
-        "Android_Test uses debug signing and is for testing. "
+        "Android_Test uses debug signing and installs separately as Spar Vault Dev with its own vault data. "
         "Configure all four Android signing secrets for a production APK. "
         if apk_archive.name.endswith("_Android_Test.zip") else
         "Android is a release build signed with the configured release key. "

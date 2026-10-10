@@ -25,6 +25,7 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.bnstechsystems.sable_vault"
+        manifestPlaceholders["appLabel"] = "Spar Vault"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -49,6 +50,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Spar Vault Dev"
+        }
+        getByName("profile") {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Spar Vault Dev"
+        }
         release {
             if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
             // Without a keystore this is unsigned; debug builds are explicitly separate.

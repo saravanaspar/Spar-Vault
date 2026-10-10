@@ -54,7 +54,8 @@ class MainActivity : FlutterActivity() {
                     "clearAutofill"->{AutofillCache.clear();result.success(null)}
                     "localNetworkPermission"->{val permission="android.permission.ACCESS_LOCAL_NETWORK";if(android.os.Build.VERSION.SDK_INT<37||checkSelfPermission(permission)==android.content.pm.PackageManager.PERMISSION_GRANTED)result.success(true)else {if(networkResult!=null)throw IllegalStateException();networkResult=result;requestPermissions(arrayOf(permission),4102)}}
                     "requestAutofill"->requestAutofill(result)
-                    "chooseBackupDirectory"->{if(directoryResult!=null)throw IllegalStateException();directoryResult=result;startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),4101)}
+                    "chooseBackupDirectory", "chooseKeyDirectory"->{if(directoryResult!=null)throw IllegalStateException();directoryResult=result;try{startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),4101)}catch(error:Exception){directoryResult=null;throw error}}
+                    "writeMasterKey"->{AndroidKeyFile(contentResolver).write(call.argument<String>("directory")?:"",call.argument<ByteArray>("bytes")?:byteArrayOf());result.success(null)}
                     "writeBackup"->{writeBackup(call.argument<String>("directory")?:"",call.argument<String>("snapshot")?:"",call.argument<String>("vaultId")?:"");result.success(null)}
                     else->result.notImplemented()
                 }
@@ -109,7 +110,7 @@ class MainActivity : FlutterActivity() {
         if(requestCode==4104){val result=setupResult;setupResult=null;result?.success((if(setupDeviceLock)deviceLock else biometric).available());return}
         if(requestCode==4101){val result=directoryResult;directoryResult=null;val uri=data?.data
             if(resultCode!=Activity.RESULT_OK||uri==null){result?.success(null);return}
-            try{contentResolver.takePersistableUriPermission(uri,(data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)));result?.success(uri.toString())}catch(_:Exception){result?.error("permission","Backup folder permission was denied.",null)}
+            try{contentResolver.takePersistableUriPermission(uri,(data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)));result?.success(uri.toString())}catch(_:Exception){result?.error("permission","Folder permission was denied. Select a writable private folder.",null)}
         }
     }
     override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,grants:IntArray){super.onRequestPermissionsResult(code,permissions,grants);if(code==4102){networkResult?.success(grants.firstOrNull()==android.content.pm.PackageManager.PERMISSION_GRANTED);networkResult=null}}

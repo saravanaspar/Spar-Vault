@@ -1,0 +1,1 @@
+enum KeyFileSaveResult { saved, downloadRequested }

@@ -2,7 +2,7 @@
 
 // Public JS-release assets only. Bump this version with every release build.
 // No broad prefix, POST, query URL, vault, transfer, or API-response caching.
-const CACHE = 'spar-static-0.2.6-9';
+const CACHE = 'spar-static-0.2.7-10';
 const FILES = [
   '', 'index.html', 'flutter_bootstrap.js', 'main.dart.js',
   'spar_integrations.js', 'manifest.json', 'favicon.png',

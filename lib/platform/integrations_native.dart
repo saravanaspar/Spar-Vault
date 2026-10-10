@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
@@ -9,9 +10,42 @@ import 'device_security.dart';
 import 'system_lock_native.dart';
 import 'installed_app.dart';
 import 'picker_options.dart';
+import 'key_file_io.dart';
+import 'key_file_result.dart';
 
 class PlatformIntegrations {
   final _systemLock = DesktopSystemLock();
+  Future<String?> chooseKeyDirectory() async {
+    if (isAndroid) return channel.invokeMethod<String>('chooseKeyDirectory');
+    const title = 'Choose private secure-key folder';
+    final linuxOpts = await pickerLinuxOptions(title: title);
+    ensureDialogForeground(title);
+    return FilePicker.getDirectoryPath(
+      dialogTitle: title,
+      linuxOptions: linuxOpts,
+    );
+  }
+
+  Future<KeyFileSaveResult?> saveMasterKey(
+    Uint8List bytes, {
+    required bool Function() canSave,
+  }) async {
+    final key = MasterKey.parse(utf8.decode(bytes));
+    key.destroy();
+    if (!canSave()) return null;
+    final directory = await chooseKeyDirectory();
+    if (directory == null || !canSave()) return null;
+    if (isAndroid) {
+      await channel.invokeMethod<void>('writeMasterKey', {
+        'directory': directory,
+        'bytes': bytes,
+      });
+    } else {
+      await writeMasterKeyFile(directory, bytes);
+    }
+    return KeyFileSaveResult.saved;
+  }
+
   Future<void> nearbyPermission() async {
     if (isAndroid &&
         await channel.invokeMethod<bool>('localNetworkPermission') != true) {

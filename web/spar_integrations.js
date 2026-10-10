@@ -1,4 +1,26 @@
 'use strict';
+window.sparSaveMasterKey=async(input,canSave)=>{
+  const bytes=new Uint8Array(input);
+  try{
+    if(bytes.length>512||!/^[0-9a-f]{64}$/i.test(new TextDecoder('utf-8',{fatal:true}).decode(bytes).replace(/[\s-]/g,'')))throw Error('Invalid key file');
+    if(!canSave())return 'cancelled';
+    if(typeof window.showDirectoryPicker!=='function'){
+      const url=URL.createObjectURL(new Blob([bytes],{type:'text/plain'}));
+      try{const link=document.createElement('a');link.href=url;link.download='spar-vault-master-key.txt';link.click();}
+      finally{URL.revokeObjectURL(url);}
+      return 'download';
+    }
+    let folder;
+    try{folder=await window.showDirectoryPicker({mode:'readwrite',id:'spar-secure-key'});}
+    catch(error){if(error.name==='AbortError')return 'cancelled';throw error;}
+    if(!canSave())return 'cancelled';
+    const file=await folder.getFileHandle('spar-vault-master-key.txt',{create:true});
+    const writer=await file.createWritable();
+    try{await writer.write(bytes);await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+    return 'saved';
+  }finally{bytes.fill(0);}
+};
 // This store contains encrypted snapshots and a granted directory handle only.
 const backupDB = () => new Promise((resolve,reject) => {
   const r=indexedDB.open('spar-backups-v1',1);
