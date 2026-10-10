@@ -178,9 +178,7 @@ class SectionCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
             decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: borderSubtle, width: 1),
-              ),
+              border: Border(bottom: BorderSide(color: borderSubtle, width: 1)),
             ),
             child: Row(
               children: [
@@ -454,8 +452,12 @@ class _MergeDialogState extends State<MergeDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _badge('Additions', widget.preview.additions.length,
-                successColor, Icons.add_circle_outline),
+            _badge(
+              'Additions',
+              widget.preview.additions.length,
+              successColor,
+              Icons.add_circle_outline,
+            ),
             if (widget.preview.additions.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 12),
@@ -464,8 +466,12 @@ class _MergeDialogState extends State<MergeDialog> {
                   style: const TextStyle(fontSize: 13, color: dimText),
                 ),
               ),
-            _badge('Conflicts', widget.preview.conflicts.length,
-                warningColor, Icons.warning_amber_rounded),
+            _badge(
+              'Conflicts',
+              widget.preview.conflicts.length,
+              warningColor,
+              Icons.warning_amber_rounded,
+            ),
             if (widget.preview.conflicts.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 4),
@@ -483,8 +489,12 @@ class _MergeDialogState extends State<MergeDialog> {
                 'Off keeps local values, including local deletions.',
               ),
             ),
-            _badge('Incoming deletions', widget.preview.deletions.length,
-                dangerColor, Icons.remove_circle_outline),
+            _badge(
+              'Incoming deletions',
+              widget.preview.deletions.length,
+              dangerColor,
+              Icons.remove_circle_outline,
+            ),
             if (widget.preview.deletions.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 4),
@@ -537,10 +547,25 @@ class _OtpCardState extends State<OtpCard> {
   String code = '••••••';
   int remaining = 0;
   int generation = 0;
-  static const _period = 30;
   @override
   void initState() {
     super.initState();
+    _configure();
+  }
+
+  @override
+  void didUpdateWidget(covariant OtpCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.totp != widget.entry.totp) _configure();
+  }
+
+  void _configure() {
+    generation++;
+    timer?.cancel();
+    config?.destroy();
+    config = null;
+    code = '••••••';
+    remaining = 0;
     try {
       config = TotpConfig.parse(widget.entry.totp);
       unawaited(_tick());
@@ -557,12 +582,19 @@ class _OtpCardState extends State<OtpCard> {
     final c = config;
     if (c == null) return;
     final epoch = ++generation;
-    final value = await c.code(DateTime.now());
-    if (mounted && generation == epoch) {
-      setState(() {
-        code = value;
-        remaining = c.remaining(DateTime.now());
-      });
+    final time = DateTime.now();
+    try {
+      final value = await c.code(time);
+      if (mounted && generation == epoch) {
+        setState(() {
+          code = value;
+          remaining = c.remaining(time);
+        });
+      }
+    } catch (_) {
+      if (mounted && generation == epoch) {
+        setState(() => code = 'Code unavailable');
+      }
     }
   }
 
@@ -579,7 +611,8 @@ class _OtpCardState extends State<OtpCard> {
   Widget build(BuildContext context) {
     final isLow = remaining <= 5;
     final progressColor = isLow ? dangerColor : accent;
-    final progress = remaining.clamp(0, _period) / _period;
+    final period = config?.period ?? 30;
+    final progress = remaining.clamp(0, period) / period;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

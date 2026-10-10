@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Find nearby Spar Vault devices and exchange encrypted vault items after confirmation.</string>
 </dict>
 </plist>

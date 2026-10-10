@@ -1,8 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+val releaseProperties = Properties()
+val releasePropertiesFile = rootProject.file("key.properties")
+if (releasePropertiesFile.exists()) releasePropertiesFile.inputStream().use { releaseProperties.load(it) }
+val releaseSigningConfigured = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { !releaseProperties.getProperty(it).isNullOrBlank() }
+if (releasePropertiesFile.exists() && !releaseSigningConfigured) error("Incomplete Android release signing configuration")
 
 android {
     namespace = "com.bnstechsystems.sable_vault"
@@ -29,11 +37,21 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseProperties.getProperty("storeFile"))
+                storePassword = releaseProperties.getProperty("storePassword")
+                keyAlias = releaseProperties.getProperty("keyAlias")
+                keyPassword = releaseProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
+            // Without a keystore this is unsigned; debug builds are explicitly separate.
         }
     }
 }
@@ -46,4 +64,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

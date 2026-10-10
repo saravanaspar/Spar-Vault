@@ -3,6 +3,38 @@ import 'package:spar_vault/platform/transfer_native.dart';
 import 'package:vault_core/vault_core.dart';
 
 void main() {
+  test('competing hosts retain exactly one usable transfer', () async {
+    final transport = LocalTransfer(), root = MasterKey.generate();
+    try {
+      final snapshot = VaultBundle(
+        await VaultCodec().seal(
+          VaultData(createdAt: DateTime.utc(2026), entries: []),
+          root,
+          vaultId: randomId(),
+          revision: 1,
+        ),
+      ).serialize();
+      Future<TransferTicket?> start() async {
+        try {
+          return await transport.host('127.0.0.1', snapshot);
+        } on FormatException {
+          return null;
+        }
+      }
+
+      final results = await Future.wait([start(), start()]);
+      final live = results.whereType<TransferTicket>().single;
+      final receiver = TransferTicket.parse(live.encode());
+      try {
+        expect(await transport.receive(receiver), snapshot);
+      } finally {
+        receiver.destroy();
+      }
+    } finally {
+      root.destroy();
+      await transport.stop();
+    }
+  });
   test(
     'one-use authenticated native transport round-trip and replay refusal',
     () async {

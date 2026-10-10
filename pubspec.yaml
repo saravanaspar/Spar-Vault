@@ -1,7 +1,7 @@
 name: spar_vault
 description: Spar Vault, a local-first password vault with a nonrecoverable random master key.
 publish_to: none
-version: 0.2.1+4
+version: 0.2.4+7
 environment:
   sdk: '>=3.13.0 <4.0.0'
 dependencies:
@@ -22,6 +22,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/
+    - LICENSE
+    - assets/fonts/LICENSE.txt
+    - third_party/licenses/
   fonts:
     # CanvasKit requires a registered Roboto fallback. Alias our bundled
     # DejaVu font so both debug and release builds avoid a network font fetch.

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:vault_core/vault_core.dart';
 
 import 'device_security.dart';
+import 'installed_app.dart';
 
 @JS('sparBackupChoose')
 external JSPromise<JSString> _choose();
@@ -21,6 +22,16 @@ external JSPromise<JSString> _list(JSString id);
 external JSPromise<JSString> _read(JSString name);
 
 class PlatformIntegrations {
+  Future<void> nearbyPermission() async {}
+  Future<void> nearbyAdvertise(Map<String, Object> metadata) async {}
+  Future<List<Map>> nearbyScan() async => [];
+  Future<void> nearbyStop() async {}
+
+  Future<List<InstalledApp>> installedApps() async => [];
+  Future<List<String>?> scanTotpQr({bool image = false}) async =>
+      throw const FormatException(
+        'Camera QR scanning currently requires Android. Paste an authenticator URI instead.',
+      );
   Future<List<String>> backupCopies(String id) async => List<String>.from(
     jsonDecode((await _list(id.toJS).toDart).toDart) as List,
   );
@@ -34,9 +45,7 @@ class PlatformIntegrations {
   Future<String> deviceName() async => 'This browser';
   Future<bool> deviceUnlockEnabled(String id) async => false;
   Future<void> enableDeviceUnlock(String id, Uint8List key) async =>
-      throw const FormatException(
-        'Phone screen lock is available on Android only.',
-      );
+      throw const FormatException('System lock is available on Android only.');
   Future<Uint8List?> unlockDevice(String id) async => null;
   Future<void> clearDeviceUnlock() async {}
   Future<bool> biometricAvailable() async => false;

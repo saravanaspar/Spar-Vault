@@ -12,6 +12,7 @@ class LocalTransfer {
   HttpServer? _server;
   TransferTicket? _ticket;
   Timer? _timer;
+  int _epoch = 0;
   Future<List<LocalNetworkChoice>> networks() async {
     await _permission();
     return (await NetworkInterface.list(type: InternetAddressType.IPv4))
@@ -38,22 +39,36 @@ class LocalTransfer {
 
   Future<TransferTicket> host(String address, String snapshot) async {
     await _permission();
-    await stop();
+    final stopped = stop();
+    final epoch = _epoch;
+    await stopped;
+    if (epoch != _epoch) {
+      throw const FormatException('Transfer cancelled. Start a new transfer.');
+    }
     if (!privateIpv4(address)) {
       throw const FormatException('Choose a private local IPv4 address.');
     }
     VaultBundle.parse(snapshot);
     final server = await HttpServer.bind(address, 0, shared: false);
-    _server = server;
+    if (epoch != _epoch) {
+      await server.close(force: true);
+      throw const FormatException('Transfer cancelled. Start a new transfer.');
+    }
     final ticket = TransferTicket.create(host: address, port: server.port);
+    _server = server;
     _ticket = ticket;
-    _timer = Timer(const Duration(minutes: 5), () => unawaited(stop()));
+    void stopCurrent() {
+      if (identical(_server, server)) unawaited(stop());
+    }
+
+    _timer = Timer(const Duration(minutes: 5), stopCurrent);
     var used = false;
     var attempts = 0;
     server.listen((request) async {
       try {
         final ip = request.connectionInfo?.remoteAddress.address ?? '';
-        if (!privateIpv4(ip) ||
+        if (epoch != _epoch ||
+            !privateIpv4(ip) ||
             request.method != 'GET' ||
             request.uri.path != '/transfer' ||
             request.headers.value('origin') != null ||
@@ -83,6 +98,7 @@ class LocalTransfer {
           ticket,
           requestNonce: nonce,
         );
+        if (epoch != _epoch) throw const FormatException('Transfer cancelled.');
         request.response.headers.set('cache-control', 'no-store');
         request.response.headers.contentType = ContentType.json;
         request.response.write(encoded);
@@ -90,7 +106,7 @@ class LocalTransfer {
         request.response.statusCode = 403;
       } finally {
         await request.response.close();
-        if (used) unawaited(stop());
+        if (used) stopCurrent();
       }
     });
     return ticket;
@@ -147,12 +163,14 @@ class LocalTransfer {
   }
 
   Future<void> stop() async {
+    _epoch++;
     _timer?.cancel();
     _timer = null;
     final s = _server;
+    final ticket = _ticket;
     _server = null;
-    await s?.close(force: true);
-    _ticket?.destroy();
     _ticket = null;
+    ticket?.destroy();
+    await s?.close(force: true);
   }
 }

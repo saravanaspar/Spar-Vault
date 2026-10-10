@@ -7,22 +7,29 @@ import 'package:vault_core/vault_core.dart';
 import '../features/files.dart';
 import '../platform/integrations.dart';
 import 'widgets.dart';
+import 'app_picker.dart';
 
 class EntryEditor extends StatefulWidget {
   const EntryEditor({
     super.key,
     this.entry,
+    this.initialKind = EntryKind.login,
     required this.touch,
     required this.integrations,
   });
   final VaultEntry? entry;
+  final EntryKind initialKind;
   final VoidCallback touch;
   final PlatformIntegrations integrations;
   @override
   State<EntryEditor> createState() => _EntryEditorState();
 }
 
-class _EntryEditorState extends State<EntryEditor> {
+class _EntryEditorState extends State<EntryEditor>
+    with SingleTickerProviderStateMixin {
+  late final TabController sections;
+  final scroll = ScrollController();
+  int section = 0;
   late final title = TextEditingController(text: widget.entry?.title),
       username = TextEditingController(text: widget.entry?.username),
       password = TextEditingController(text: widget.entry?.password),
@@ -30,12 +37,57 @@ class _EntryEditorState extends State<EntryEditor> {
       notes = TextEditingController(text: widget.entry?.notes),
       totp = TextEditingController(text: widget.entry?.totp),
       package = TextEditingController(text: widget.entry?.androidPackage);
-  late EntryKind kind = widget.entry?.kind ?? EntryKind.login;
+  late EntryKind kind = widget.entry?.kind ?? widget.initialKind;
+  String? appName;
+  List<int> get sectionKinds => [
+    0,
+    if (kind == EntryKind.login) 1,
+    2,
+    3,
+    if (widget.integrations.isAndroid && kind == EntryKind.login) 4,
+  ];
   late bool favorite = widget.entry?.favorite ?? false;
   late List<VaultAttachment> attachments = [...?widget.entry?.attachments];
   late List<String> certs = [...?widget.entry?.androidCertificates];
   String? error;
   bool working = false;
+  @override
+  void initState() {
+    super.initState();
+    sections = TabController(length: sectionKinds.length, vsync: this)
+      ..addListener(sectionChanged);
+    if (widget.integrations.isAndroid &&
+        kind == EntryKind.login &&
+        package.text.isNotEmpty) {
+      unawaited(loadAppName());
+    }
+  }
+
+  Future<void> loadAppName() async {
+    final requested = package.text;
+    try {
+      final apps = await widget.integrations.installedApps();
+      if (!mounted || package.text != requested) return;
+      final matches = apps.where((app) => app.package == requested);
+      if (matches.isNotEmpty) setState(() => appName = matches.first.name);
+    } catch (_) {
+      /* A saved binding stays intact if the app is no longer visible. */
+    }
+  }
+
+  void sectionChanged() {
+    final next = sectionKinds[sections.index];
+    if (section == next) return;
+    FocusScope.of(context).unfocus();
+    setState(() => section = next);
+  }
+
+  void showError(String message, int target) {
+    setState(() => error = message);
+    sections.index = sectionKinds.indexOf(target);
+    if (scroll.hasClients) scroll.jumpTo(0);
+  }
+
   Widget field(
     TextEditingController c,
     String label, {
@@ -54,7 +106,11 @@ class _EntryEditorState extends State<EntryEditor> {
     ),
   );
   Future<void> attach() async {
-    setState(() => working = true);
+    widget.touch();
+    setState(() {
+      working = true;
+      error = null;
+    });
     try {
       if (attachments.length >= 10) {
         throw const FormatException('Maximum ten attachments per item.');
@@ -102,20 +158,30 @@ class _EntryEditorState extends State<EntryEditor> {
         name.dispose();
       }
     } on FormatException catch (e) {
-      if (mounted) setState(() => error = e.message);
+      if (mounted) showError(e.message, 3);
     } catch (_) {
-      if (mounted) setState(() => error = 'Could not read the attachment.');
+      if (mounted) showError('Could not read the attachment.', 3);
     } finally {
       if (mounted) setState(() => working = false);
     }
   }
 
   void save() {
-    try {
-      if (totp.text.trim().isNotEmpty) {
+    widget.touch();
+    if (title.text.trim().isEmpty) {
+      showError('Enter a title for this item.', 0);
+      return;
+    }
+    if (totp.text.trim().isNotEmpty) {
+      try {
         final c = TotpConfig.parse(totp.text.trim());
         c.destroy();
+      } on FormatException catch (e) {
+        showError(e.message, 2);
+        return;
       }
+    }
+    try {
       final binding = package.text.trim();
       final old = widget.entry;
       final value = VaultEntry(
@@ -136,12 +202,22 @@ class _EntryEditorState extends State<EntryEditor> {
       );
       Navigator.pop(context, value);
     } on FormatException catch (e) {
-      setState(() => error = e.message);
+      showError(
+        e.message,
+        e.message == 'Invalid Android package.' &&
+                widget.integrations.isAndroid &&
+                kind == EntryKind.login
+            ? 4
+            : section,
+      );
     }
   }
 
   @override
   void dispose() {
+    sections.removeListener(sectionChanged);
+    sections.dispose();
+    scroll.dispose();
     for (final c in [title, username, password, url, notes, totp, package]) {
       c.clear();
       c.dispose();
@@ -151,185 +227,330 @@ class _EntryEditorState extends State<EntryEditor> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: dialogTitle(
-      widget.entry == null ? 'Add item' : 'Edit item',
-      widget.entry == null ? Icons.add_circle_outline : Icons.edit_outlined,
-    ),
-    content: SizedBox(
-      width: 580,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            field(title, 'Title', prefixIcon: Icons.label_outline),
-            SegmentedButton<EntryKind>(
-              segments: const [
-                ButtonSegment(value: EntryKind.login, label: Text('Login')),
-                ButtonSegment(
-                  value: EntryKind.note,
-                  label: Text('Secure note'),
-                ),
-              ],
-              selected: {kind},
-              onSelectionChanged: (v) => setState(() => kind = v.first),
-            ),
-            const SizedBox(height: 16),
-            if (kind == EntryKind.login)
-              ExpansionTile(
-                initiallyExpanded: true,
-                title: const Text('Credentials'),
-                leading: const Icon(Icons.key_outlined, size: 20, color: accent),
-                children: [
-                  field(username, 'Email / username', prefixIcon: Icons.person_outline),
-                  field(password, 'Password', secret: true, prefixIcon: Icons.lock_outline),
-                  TextButton.icon(
-                    onPressed: () {
-                      password.text = generatePassword();
-                      widget.touch();
-                    },
-                    icon: const Icon(Icons.auto_awesome),
-                    label: const Text('Generate 24-character password'),
-                  ),
-                  field(url, 'Website URL (HTTPS for autofill)', prefixIcon: Icons.language),
-                ],
-              ),
-            ExpansionTile(
-              initiallyExpanded: kind == EntryKind.note,
-              title: const Text('Notes'),
-              leading: const Icon(Icons.notes_outlined, size: 20, color: noteColor),
-              children: [field(notes, 'Secure notes', lines: 5)],
-            ),
-            ExpansionTile(
-              title: const Text('Authenticator'),
-              leading: const Icon(Icons.timer_outlined, size: 20, color: accent),
-              subtitle: Text(
-                totp.text.isEmpty ? 'Optional offline TOTP' : 'TOTP configured',
-                style: TextStyle(
-                  color: totp.text.isEmpty ? dimText : successColor,
-                  fontSize: 12,
-                ),
-              ),
-              children: [
-                const InfoBox(
-                  text: 'Store a Base32 secret or otpauth://totp URI. This app does not scan QR codes in this release.',
-                ),
-                const SizedBox(height: 12),
-                field(totp, 'TOTP secret / otpauth URI', secret: true),
-              ],
-            ),
-            ExpansionTile(
-              title: Text('Encrypted attachments (${attachments.length})'),
-              leading: const Icon(Icons.attach_file, size: 20, color: accent),
-              children: [
-                const InfoBox(
-                  text: 'Maximum 2 MiB per file, ten files per item, 8 MiB total per vault. Saved attachments leave the encrypted vault.',
-                ),
-                const SizedBox(height: 8),
-                ...attachments.map(
-                  (a) => ListTile(
-                    title: Text(a.name),
-                    subtitle: Text('${a.byteLength} bytes',
-                        style: const TextStyle(color: dimText, fontSize: 12)),
-                    trailing: IconButton(
-                      tooltip: 'Remove attachment',
-                      onPressed: () => setState(() => attachments.remove(a)),
-                      icon: const Icon(Icons.delete_outline, color: dangerColor),
-                    ),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: working ? null : attach,
-                  icon: const Icon(Icons.attach_file),
-                  label: const Text('Add attachment'),
-                ),
-              ],
-            ),
-            if (widget.integrations.isAndroid)
-              ExpansionTile(
-                title: const Text('Android app binding'),
-                leading: const Icon(Icons.android, size: 20, color: successColor),
-                children: [
-                  VField(
-                    controller: package,
-                    label: 'Installed app package, e.g. com.example.app',
-                    touch: widget.touch,
-                    onChanged: (_) => setState(() => certs = []),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      try {
-                        final v = await widget.integrations.certificates(
-                          package.text.trim(),
-                        );
-                        if (v.isEmpty) throw const FormatException();
-                        if (mounted) setState(() => certs = v);
-                      } catch (_) {
-                        if (mounted) {
-                          setState(
-                            () => error = 'Install the app and enter its exact Android package.',
-                          );
-                        }
-                      }
-                    },
-                    child: const Text('Bind installed signing certificates'),
-                  ),
-                  Text(
-                    certs.isEmpty
-                        ? 'No trusted app bound. Native app autofill will be refused.'
-                        : '${certs.length} certificate(s) pinned for this app.',
-                    style: TextStyle(
-                      color: certs.isEmpty ? dimText : successColor,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              value: favorite,
-              onChanged: (v) => setState(() => favorite = v ?? false),
-              title: const Text('Favorite'),
-              secondary: Icon(
-                favorite ? Icons.star_rounded : Icons.star_outline_rounded,
-                color: favorite ? accent : dimText,
-              ),
-            ),
-            if (error != null)
-              Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: dangerColor.withAlpha(20),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: dangerColor.withAlpha(50)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: dangerColor, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(error!, style: const TextStyle(color: dangerColor, fontSize: 13)),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+  Future<void> chooseApp() async {
+    widget.touch();
+    final app = await showDialog<InstalledApp>(
+      context: context,
+      builder: (_) =>
+          AppPicker(integrations: widget.integrations, touch: widget.touch),
+    );
+    if (app == null || !mounted) return;
+    setState(() {
+      working = true;
+      error = null;
+    });
+    try {
+      final values = await widget.integrations.certificates(app.package);
+      if (values.isEmpty) {
+        throw const FormatException('Could not verify this installed app.');
+      }
+      if (!mounted) return;
+      setState(() {
+        package.text = app.package;
+        appName = app.name;
+        certs = values;
+      });
+    } catch (_) {
+      if (mounted) {
+        showError(
+          'Could not verify this app. Check that it is still installed and try again.',
+          4,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => working = false);
+    }
+  }
+
+  Future<void> scanTotp(bool image) async {
+    widget.touch();
+    setState(() {
+      working = true;
+      error = null;
+    });
+    try {
+      final values = await widget.integrations.scanTotpQr(image: image);
+      if (!mounted || values == null) return;
+      final accounts = values
+          .expand((v) => AuthenticatorImport.parse(v).accounts)
+          .toList();
+      if (accounts.length != 1) {
+        throw const FormatException(
+          'For multiple accounts, use Codes → Import from Google Authenticator.',
+        );
+      }
+      setState(() => totp.text = accounts.single.uri);
+    } on FormatException catch (e) {
+      if (mounted) showError(e.message, 2);
+    } catch (_) {
+      if (mounted) {
+        showError(
+          'Could not scan the QR. Allow camera access or choose a clear QR image.',
+          2,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => working = false);
+    }
+  }
+
+  List<Widget> sectionFields() => switch (section) {
+    0 => [
+      field(title, 'Title', prefixIcon: Icons.label_outline),
+      if (kind == EntryKind.login) ...[
+        field(username, 'Email / username', prefixIcon: Icons.person_outline),
+        field(
+          password,
+          'Password',
+          secret: true,
+          prefixIcon: Icons.lock_outline,
+        ),
+        TextButton.icon(
+          onPressed: () {
+            password.text = generatePassword();
+            widget.touch();
+          },
+          icon: const Icon(Icons.auto_awesome),
+          label: const Text('Generate 24-character password'),
+        ),
+        const SizedBox(height: 8),
+        field(
+          url,
+          'Website URL (HTTPS for autofill)',
+          prefixIcon: Icons.language,
+        ),
+      ] else
+        field(notes, 'Secure note', lines: 5),
+      CheckboxListTile(
+        contentPadding: EdgeInsets.zero,
+        value: favorite,
+        onChanged: (value) {
+          widget.touch();
+          setState(() => favorite = value ?? false);
+        },
+        title: const Text('Favorite'),
+        secondary: Icon(
+          favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+          color: favorite ? accent : dimText,
         ),
       ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
+    ],
+    1 => [field(notes, 'Extra notes', lines: 5)],
+    2 => [
+      const InfoBox(
+        text: 'Scan an authenticator QR, choose its image, or enter a Base32 secret / otpauth URI. For a Google export with multiple accounts, use Codes → Import from Google Authenticator.',
       ),
-      FilledButton(
-        onPressed: working ? null : save,
-        child: const Text('Save item'),
+      const SizedBox(height: 16),
+      if (widget.integrations.isAndroid)
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: working ? null : () => scanTotp(false),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan QR'),
+            ),
+            OutlinedButton.icon(
+              onPressed: working ? null : () => scanTotp(true),
+              icon: const Icon(Icons.image_outlined),
+              label: const Text('Choose QR image'),
+            ),
+          ],
+        ),
+      const SizedBox(height: 12),
+      field(totp, 'TOTP secret / otpauth URI', secret: true),
+    ],
+    3 => [
+      const InfoBox(
+        text: 'Maximum 2 MiB per file, ten files per item, 8 MiB total per vault. Saved attachments leave the encrypted vault.',
+      ),
+      const SizedBox(height: 12),
+      ...attachments.map(
+        (attachment) => ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(
+            attachment.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            '${attachment.byteLength} bytes',
+            style: const TextStyle(color: dimText, fontSize: 12),
+          ),
+          trailing: IconButton(
+            tooltip: 'Remove attachment',
+            onPressed: () {
+              widget.touch();
+              setState(() => attachments.remove(attachment));
+            },
+            icon: const Icon(Icons.delete_outline, color: dangerColor),
+          ),
+        ),
+      ),
+      TextButton.icon(
+        onPressed: working ? null : attach,
+        icon: const Icon(Icons.attach_file),
+        label: Text(working ? 'Reading attachment…' : 'Add attachment'),
       ),
     ],
+    _ => [
+      const InfoBox(
+        text: 'Optional Android autofill binding for an installed app.',
+      ),
+      const SizedBox(height: 16),
+      if (package.text.isNotEmpty)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.android),
+          title: Text(appName ?? 'Selected Android app'),
+          subtitle: Text(
+            appName == null
+                ? 'Previously saved app binding'
+                : 'Verified installed app',
+          ),
+          trailing: IconButton(
+            tooltip: 'Remove app binding',
+            onPressed: working
+                ? null
+                : () => setState(() {
+                    package.clear();
+                    appName = null;
+                    certs = [];
+                  }),
+            icon: const Icon(Icons.close),
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: working ? null : chooseApp,
+        icon: const Icon(Icons.apps),
+        label: Text(working ? 'Verifying app…' : 'Choose installed app'),
+      ),
+      const SizedBox(height: 8),
+      Text(
+        certs.isEmpty
+            ? 'Choose an app to use this login with Android autofill.'
+            : 'App verified. This login can be used for autofill.',
+        style: TextStyle(
+          color: certs.isEmpty ? dimText : successColor,
+          fontSize: 13,
+        ),
+      ),
+    ],
+  };
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    insetPadding: const EdgeInsets.all(16),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 620, maxHeight: 680),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final header = Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: dialogTitle(
+              widget.entry == null
+                  ? (kind == EntryKind.note ? 'Add secure note' : 'Add login')
+                  : 'Edit item',
+              widget.entry == null
+                  ? Icons.add_circle_outline
+                  : Icons.edit_outlined,
+            ),
+          );
+          final tabs = TabBar(
+            controller: sections,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            labelColor: accent,
+            unselectedLabelColor: dimText,
+            indicatorColor: accent,
+            onTap: (_) => widget.touch(),
+            tabs: [
+              Tab(text: kind == EntryKind.login ? 'Login' : 'Note'),
+              if (kind == EntryKind.login) const Tab(text: 'Extra notes'),
+              const Tab(text: '2FA'),
+              Tab(text: 'Files (${attachments.length})'),
+              if (widget.integrations.isAndroid && kind == EntryKind.login)
+                const Tab(text: 'Autofill'),
+            ],
+          );
+          final content = Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (error != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: dangerColor.withAlpha(20),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: dangerColor.withAlpha(50)),
+                    ),
+                    child: Text(
+                      error!,
+                      style: const TextStyle(color: Color(0xFFFFB4AB)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                ...sectionFields(),
+              ],
+            ),
+          );
+          final actions = Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: OverflowBar(
+              alignment: MainAxisAlignment.end,
+              spacing: 8,
+              overflowSpacing: 8,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: working ? null : save,
+                  child: const Text('Save item'),
+                ),
+              ],
+            ),
+          );
+          // On short screens or with a large keyboard, let the entire dialog
+          // scroll so that the tabs and Save button remain reachable.
+          if (constraints.maxHeight < 360 ||
+              MediaQuery.textScalerOf(context).scale(14) > 21) {
+            return SingleChildScrollView(
+              controller: scroll,
+              primary: false,
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [header, tabs, content, actions],
+              ),
+            );
+          }
+          return Column(
+            children: [
+              header,
+              tabs,
+              Expanded(
+                child: SingleChildScrollView(
+                  key: ValueKey(section),
+                  controller: scroll,
+                  primary: false,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  child: content,
+                ),
+              ),
+              actions,
+            ],
+          );
+        },
+      ),
+    ),
   );
 }
 
@@ -376,8 +597,14 @@ class _EntryDetailsState extends State<EntryDetails> {
     margin: const EdgeInsets.only(bottom: 2),
     child: ListTile(
       contentPadding: EdgeInsets.zero,
-      title: Text(label,
-          style: const TextStyle(fontSize: 12, color: dimText, letterSpacing: 0.5)),
+      title: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 12,
+          color: dimText,
+          letterSpacing: 0.5,
+        ),
+      ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 4),
         child: Text(
@@ -434,17 +661,28 @@ class _EntryDetailsState extends State<EntryDetails> {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    Text('Attachments',
-                        style: TextStyle(fontSize: 12, color: dimText, letterSpacing: 0.5)),
+                    Text(
+                      'Attachments',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: dimText,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: surface,
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: const Text('exporting saves plaintext',
-                          style: TextStyle(fontSize: 11, color: dimText)),
+                      child: const Text(
+                        'exporting saves plaintext',
+                        style: TextStyle(fontSize: 11, color: dimText),
+                      ),
                     ),
                   ],
                 ),
@@ -452,8 +690,10 @@ class _EntryDetailsState extends State<EntryDetails> {
                   (a) => ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(a.name),
-                    subtitle: Text('${a.byteLength} bytes',
-                        style: const TextStyle(color: dimText, fontSize: 12)),
+                    subtitle: Text(
+                      '${a.byteLength} bytes',
+                      style: const TextStyle(color: dimText, fontSize: 12),
+                    ),
                     trailing: IconButton(
                       tooltip: 'Save attachment',
                       onPressed: () => widget.save(a),
@@ -477,7 +717,10 @@ class _EntryDetailsState extends State<EntryDetails> {
                                 ),
                                 subtitle: const Text(
                                   'Previous password • copy only',
-                                  style: TextStyle(color: dimText, fontSize: 12),
+                                  style: TextStyle(
+                                    color: dimText,
+                                    fontSize: 12,
+                                  ),
                                 ),
                                 trailing: IconButton(
                                   tooltip: 'Copy previous password',
@@ -491,7 +734,10 @@ class _EntryDetailsState extends State<EntryDetails> {
                 ),
               const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: surface,
                   borderRadius: BorderRadius.circular(8),

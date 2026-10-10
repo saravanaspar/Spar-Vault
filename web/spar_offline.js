@@ -2,14 +2,20 @@
 
 // Public JS-release assets only. Bump this version with every release build.
 // No broad prefix, POST, query URL, vault, transfer, or API-response caching.
-const CACHE = 'spar-static-0.2.1-4';
+const CACHE = 'spar-static-0.2.4-7';
 const FILES = [
   '', 'index.html', 'flutter_bootstrap.js', 'main.dart.js',
   'spar_integrations.js', 'manifest.json', 'favicon.png',
   'icons/Icon-192.png', 'icons/Icon-512.png',
   'icons/Icon-maskable-192.png', 'icons/Icon-maskable-512.png',
+  'assets/LICENSE', 'assets/NOTICES.Z',
+  'assets/assets/fonts/LICENSE.txt',
+  'assets/third_party/licenses/Flutter.txt',
+  'assets/third_party/licenses/ZXing-Apache-2.0.txt',
+  'assets/third_party/licenses/libfido2.txt',
   'assets/FontManifest.json', 'assets/AssetManifest.bin',
   'assets/AssetManifest.bin.json', 'assets/fonts/MaterialIcons-Regular.otf',
+  'assets/assets/branding/app_icon.png',
   'assets/assets/fonts/DejaVuSans.ttf',
   'assets/assets/fonts/DejaVuSans-Bold.ttf',
   'assets/assets/fonts/DejaVuSansMono.ttf',

@@ -11,14 +11,29 @@ import 'app/vault_controller.dart';
 import 'features/files.dart';
 import 'platform/local_store.dart';
 import 'platform/integrations.dart';
-import 'platform/transfer.dart';
+import 'platform/nearby.dart';
+import 'ui/nearby_transfer.dart';
 import 'platform/bridge.dart';
 import 'platform/picker_options.dart';
 import 'ui/entry_editor.dart';
 import 'ui/widgets.dart';
+import 'ui/authenticator_import.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    for (final entry in <String, String>{
+      'Spar Vault': 'LICENSE',
+      'DejaVu fonts': 'assets/fonts/LICENSE.txt',
+      'Flutter': 'third_party/licenses/Flutter.txt',
+      'ZXing': 'third_party/licenses/ZXing-Apache-2.0.txt',
+      'libfido2': 'third_party/licenses/libfido2.txt',
+    }.entries) {
+      yield LicenseEntryWithLineBreaks([
+        entry.key,
+      ], await rootBundle.loadString(entry.value));
+    }
+  });
   warmupLinuxWindowId();
   FlutterError.onError = (_) =>
       debugPrint('Spar Vault: UI error (details redacted).');
@@ -28,8 +43,6 @@ void main() {
   };
   runApp(const SparVaultApp());
 }
-
-
 
 class SparVaultApp extends StatelessWidget {
   const SparVaultApp({super.key, this.store, this.now, this.integrations});
@@ -78,9 +91,7 @@ class SparVaultApp extends StatelessWidget {
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: panel,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
       appBarTheme: const AppBarTheme(
         backgroundColor: panel,
@@ -90,6 +101,8 @@ class SparVaultApp extends StatelessWidget {
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         backgroundColor: surface,
+        contentTextStyle: const TextStyle(color: Color(0xFFF5F7FF)),
+        actionTextColor: accent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       dividerTheme: const DividerThemeData(color: borderSubtle),
@@ -110,10 +123,7 @@ class SparVaultApp extends StatelessWidget {
           fontWeight: FontWeight.w600,
           fontSize: 12,
         ),
-        unselectedLabelTextStyle: TextStyle(
-          color: dimText,
-          fontSize: 12,
-        ),
+        unselectedLabelTextStyle: TextStyle(color: dimText, fontSize: 12),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: panel,
@@ -127,7 +137,11 @@ class SparVaultApp extends StatelessWidget {
         }),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return const TextStyle(color: accent, fontWeight: FontWeight.w600, fontSize: 12);
+            return const TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            );
           }
           return const TextStyle(color: dimText, fontSize: 12);
         }),
@@ -158,7 +172,13 @@ class VaultHome extends StatefulWidget {
 class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   late final VaultController vault;
   late final integrations = widget.integrations ?? PlatformIntegrations();
-  final transfer = LocalTransfer(), bridge = AutofillBridge();
+  final bridge = AutofillBridge();
+  late final nearby = NearbyTransfer(
+    permission: integrations.nearbyPermission,
+    advertise: integrations.isAndroid ? integrations.nearbyAdvertise : null,
+    nativeScan: integrations.isAndroid ? integrations.nearbyScan : null,
+    nativeStop: integrations.isAndroid ? integrations.nearbyStop : null,
+  );
   final keyInput = TextEditingController(),
       passwordInput = TextEditingController(),
       confirmInput = TextEditingController(),
@@ -170,6 +190,8 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   Completer<bool>? foregroundWait;
   DateTime? lastActivity, copiedAt, lastAutomaticBackup;
   String? copiedValue, startupError, backupError, lastAutoSnapshot;
+  bool backupRetryBlocked = false;
+  Timer? backupRetryTimer;
   bool acknowledged = false,
       wasUnlocked = false,
       passwordMode = false,
@@ -226,7 +248,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     } catch (_) {
       biometricReady = false;
       deviceUnlockReady = false;
-      if (integrations.isAndroid) integrationError = 'Android integration is unavailable. Stop and rebuild the app after installing this update.';
+      if (integrations.isAndroid || integrations.isDesktop) integrationError = 'System authentication integration is unavailable. Rebuild the app after installing this update.';
     }
   }
 
@@ -242,6 +264,11 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       Navigator.of(context).popUntil((r) => r.isFirst);
     }
     if (!wasUnlocked && vault.unlocked) {
+      backupError = null;
+      lastAutomaticBackup = null;
+      lastAutoSnapshot = null;
+      backupRetryBlocked = false;
+      backupRetryTimer?.cancel();
       lastActivity = null;
       _touch();
       passwordInput.clear();
@@ -304,7 +331,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     acknowledged = false;
     vault.lock();
     unawaited(integrations.cancelBiometric().catchError((_) {}));
-    unawaited(transfer.stop());
+    unawaited(nearby.stop());
     _syncIntegrations();
     Navigator.of(context).popUntil((r) => r.isFirst);
     unawaited(_clearClipboard());
@@ -401,22 +428,28 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   void _automaticBackup() {
     if (!vault.unlocked ||
         !vault.preferences.backupEnabled ||
-        lastAutoSnapshot == vault.encryptedBackup) {
+        lastAutoSnapshot == vault.encryptedBackup ||
+        backupRetryBlocked) {
       return;
     }
     final snapshot = vault.encryptedBackup!,
         prefs = vault.preferences,
-        id = vault.vaultId!;
+        id = vault.vaultId!,
+        epoch = secretEpoch;
     lastAutoSnapshot = snapshot;
     backupQueue = backupQueue.catchError((_) {}).then((_) async {
       try {
         if (!mounted ||
+            epoch != secretEpoch ||
             !vault.unlocked ||
             !vault.preferences.backupEnabled ||
             vault.vaultId != id) {
           return;
         }
         await integrations.writeBackup(prefs.backupDirectory, snapshot, id);
+        if (!mounted || epoch != secretEpoch || vault.vaultId != id) return;
+        backupRetryBlocked = false;
+        backupRetryTimer?.cancel();
         if (mounted) {
           setState(() {
             lastAutomaticBackup = now;
@@ -424,6 +457,14 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           });
         }
       } catch (_) {
+        if (!mounted || epoch != secretEpoch || vault.vaultId != id) return;
+        if (lastAutoSnapshot == snapshot) lastAutoSnapshot = null;
+        backupRetryBlocked = true;
+        backupRetryTimer?.cancel();
+        backupRetryTimer = Timer(const Duration(seconds: 30), () {
+          backupRetryBlocked = false;
+          if (mounted) _automaticBackup();
+        });
         if (mounted) {
           setState(
             () => backupError = 'Automatic backup failed. Select the folder again or export a backup now.',
@@ -433,7 +474,10 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _act(Future<void> Function() task) async {
+  Future<void> _act(
+    Future<void> Function() task, {
+    String? failureMessage,
+  }) async {
     try {
       await task();
     } on SessionExpired {
@@ -456,24 +500,27 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       _message(
         'Stop and rebuild the Android app to install the native integration update.',
       );
-    } catch (_) {
+    } catch (error) {
+      debugPrint('Spar Vault: operation failed (${error.runtimeType}).');
       _message(
-        'Operation failed. Check permissions, storage and the selected file.',
+        failureMessage ?? 'Operation failed. Check permissions, storage and the selected file.',
       );
     }
   }
 
   void _message(String text) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.info_outline, color: accent, size: 18),
-            const SizedBox(width: 12),
-            Expanded(child: Text(text)),
-          ],
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.info_outline, color: accent, size: 18),
+              const SizedBox(width: 12),
+              Expanded(child: Text(text)),
+            ],
+          ),
         ),
-      ));
+      );
     }
   }
 
@@ -566,6 +613,8 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       bytes: bytes,
       linuxOptions: linuxOpts,
     );
+    // file_picker_web 4.0.1 returns null after requesting a browser download.
+    // Its null result is not proof of cancellation or a completed disk save.
     return kIsWeb || result != null;
   }
 
@@ -640,8 +689,13 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   }
 
   Future<void> _importKey({bool unlock = true}) async {
+    final epoch = secretEpoch;
     final key = await pickMasterKey();
     if (key == null) return;
+    if (!mounted || epoch != secretEpoch) {
+      key.destroy();
+      return;
+    }
     if (unlock) {
       await vault.unlock(key);
     } else {
@@ -654,7 +708,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   Future<T> _systemAuthentication<T>(Future<T> Function() operation) async {
     if (authenticationPending) {
       throw const FormatException(
-        'An Android authentication prompt is already open.',
+        'A system authentication prompt is already open.',
       );
     }
     final epoch = secretEpoch;
@@ -677,7 +731,13 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       }
       return result as T;
     } catch (_) {
-      if (result is Uint8List) result.fillRange(0, result.length, 0);
+      if (result is Uint8List) {
+        try {
+          result.fillRange(0, result.length, 0);
+        } on UnsupportedError {
+          /* Read-only platform buffer. */
+        }
+      }
       rethrow;
     } finally {
       authenticationPending = false;
@@ -696,12 +756,19 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   Future<void> _biometricUnlock({bool deviceLock = false}) async {
     if (!await _prepareAuthentication(deviceLock)) return;
     final epoch = secretEpoch;
-    final bytes = await _systemAuthentication(
+    final received = await _systemAuthentication(
       () => deviceLock
           ? integrations.unlockDevice(vault.vaultId!)
           : integrations.unlockBiometric(vault.vaultId!),
     );
-    if (bytes == null) return;
+    if (received == null) return;
+    // Platform codecs may return a read-only view. Own the buffer we wipe.
+    final bytes = Uint8List.fromList(received);
+    try {
+      received.fillRange(0, received.length, 0);
+    } on UnsupportedError {
+      // The native root was erased after encoding this platform response.
+    }
     try {
       if (epoch != secretEpoch) return;
       await vault.unlock(MasterKey.fromBytes(bytes));
@@ -785,11 +852,19 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _edit([VaultEntry? entry]) async {
+  Future<void> _edit([
+    VaultEntry? entry,
+    EntryKind initialKind = EntryKind.login,
+  ]) async {
     _requireSession();
     final epoch = secretEpoch;
     final value = await _dialog<VaultEntry>(
-      EntryEditor(entry: entry, touch: _touch, integrations: integrations),
+      EntryEditor(
+        entry: entry,
+        initialKind: initialKind,
+        touch: _touch,
+        integrations: integrations,
+      ),
     );
     if (value != null && epoch == secretEpoch && vault.unlocked) {
       await vault.upsert(value);
@@ -1003,8 +1078,10 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       throw FormatException(deviceSecurity.explanation(deviceLock));
     }
     if (!await _confirm(
-      'Set up Android authentication',
-      '${deviceSecurity.explanation(deviceLock)} Open Android settings now?',
+      integrations.isAndroid
+          ? 'Set up Android authentication'
+          : 'Set up System lock',
+      '${deviceSecurity.explanation(deviceLock)} Open system settings now?',
     )) {
       return false;
     }
@@ -1021,11 +1098,9 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     _requireSession();
     if (!await _prepareAuthentication(deviceLock)) return;
     if (!await _confirm(
+      deviceLock ? 'Enable System lock?' : 'Enable fingerprint / face unlock?',
       deviceLock
-          ? 'Enable Phone screen lock?'
-          : 'Enable fingerprint / face unlock?',
-      deviceLock
-          ? 'Your strong fingerprint OR anyone who knows your phone PIN, pattern or password can unlock this vault on this device. Android protects a wrapped key in hardware. This is a local unlock method, not an online passkey or backup recovery.'
+          ? '${deviceSecurity.systemDescription} Anyone authorized by this device authentication can unlock this vault. It does not recover a deleted vault or replace your backup key.'
           : 'This device will retain a hardware-wrapped copy of the secure key. Losing the key file alone will no longer remove access on this device. Biometrics do not recover a deleted vault.',
     )) {
       return;
@@ -1202,157 +1277,41 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     return selected;
   }
 
-  Future<void> _sendTransfer({bool lan = false}) async {
+  Future<void> _sendNearby() async {
     _requireSession();
-    final snapshot = vault.encryptedBackup;
-    if (snapshot == null) return;
-    final epoch = secretEpoch;
-    TransferTicket? ticket;
-    var senderName = 'This device';
-    try {
-      if (lan) {
-        senderName = await integrations.deviceName();
-        final networks = await transfer.networks();
-        if (networks.isEmpty) {
-          throw const FormatException(
-            'No private network address found. Connect both devices to the same trusted network.',
-          );
-        }
-        final address = await _dialog<String>(
-          SimpleDialog(
-            title: Text('Send from $senderName'),
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                child: Text(
-                  'Choose this device’s network. This list is not a scan of nearby devices.',
-                ),
-              ),
-              ...networks.map(
-                (n) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, n.address),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('$senderName • ${n.label}'),
-                      Text(
-                        n.address,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-        if (address == null || epoch != secretEpoch) return;
-        ticket = await transfer.host(address, snapshot);
-      } else {
-        ticket = TransferTicket.create();
-        final package = await TransferPackage.seal(snapshot, ticket),
-            bytes = Uint8List.fromList(utf8.encode(package));
-        try {
-          if (!await _save('spar-vault-transfer.svx', bytes, [
-            'svx',
-          ], mime: 'application/json')) {
-            return;
-          }
-        } finally {
-          bytes.fillRange(0, bytes.length, 0);
-        }
-      }
-      if (epoch != secretEpoch) return;
-      final code = ticket.encode();
-      await _dialog<void>(
-        AlertDialog(
-          title: const Text('Private transfer code'),
-          content: SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    lan
-                        ? 'Sending from $senderName. The receiver fetches once using this private code, which includes the network address.'
-                        : 'Send the encrypted .svx file to the receiver too.',
-                  ),
-                  const Text(
-                    'The code expires in five minutes. Share it privately. It protects transport and does not contain your master key.',
-                  ),
-                  const SizedBox(height: 12),
-                  SelectableText(
-                    code,
-                    style: const TextStyle(
-                      fontFamily: 'LocalMono',
-                      fontSize: 12,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => _copy(code),
-                    child: const Text('Copy transfer code'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Finish transfer'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      await transfer.stop();
-      ticket?.destroy();
+    if (vault.entries.isEmpty) {
+      throw const FormatException('Add an item before sending.');
     }
+    final epoch = secretEpoch;
+    final name = await integrations.deviceName();
+    if (!mounted || epoch != secretEpoch) return;
+    await _dialog<void>(
+      NearbySendDialog(
+        transfer: nearby,
+        name: name,
+        entries: vault.entries.toList(),
+        touch: _touch,
+      ),
+    );
   }
 
-  Future<void> _receiveTransfer({bool lan = false}) async {
+  Future<void> _receiveNearby() async {
+    _requireSession();
     final epoch = secretEpoch;
-    final code = await _dialog<String>(TransferCodeDialog(touch: _touch));
-    if (code == null || epoch != secretEpoch) return;
-    final ticket = TransferTicket.parse(code);
-    try {
-      String snapshot;
-      if (lan) {
-        snapshot = await transfer.receive(ticket);
-      } else {
-        final bytes = await pickBytes(
-          limit: maxTransferBytes,
-          extension: 'svx',
-          title: 'Select encrypted transfer .svx',
-        );
-        if (bytes == null) return;
-        try {
-          snapshot = await TransferPackage.open(utf8.decode(bytes), ticket);
-        } finally {
-          bytes.fillRange(0, bytes.length, 0);
-        }
-      }
-      if (epoch != secretEpoch) return;
-      if (!vault.unlocked ||
-          VaultBundle.parse(snapshot).header.vaultId != vault.vaultId) {
-        await _restore(snapshot: snapshot);
-        return;
-      }
-      final preview = await vault.previewMerge(snapshot);
-      if (epoch != secretEpoch) return;
-      final choice = await _dialog<MergeChoice>(MergeDialog(preview: preview));
-      if (choice != null && epoch == secretEpoch) {
-        await vault.mergeSnapshot(
-          snapshot,
-          useIncomingConflicts: choice.conflicts,
-          applyDeletions: choice.deletions,
-        );
-        _message('Transfer merged. Local unlock settings were kept.');
-      }
-    } finally {
-      ticket.destroy();
-    }
+    final name = await integrations.deviceName();
+    if (!mounted || epoch != secretEpoch) return;
+    await _dialog<void>(
+      NearbyReceiveDialog(
+        transfer: nearby,
+        name: name,
+        touch: _touch,
+        import: (entries) async {
+          if (epoch != secretEpoch) throw const SessionExpired();
+          _requireSession();
+          return vault.importEntries(entries);
+        },
+      ),
+    );
   }
 
   @override
@@ -1363,6 +1322,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     HardwareKeyboard.instance.removeHandler(_keyEvent);
     idleTimer?.cancel();
     clipboardTimer?.cancel();
+    backupRetryTimer?.cancel();
     privacy?.remove();
     privacy?.dispose();
     generated?.destroy();
@@ -1372,7 +1332,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     unawaited(integrations.cancelBiometric().catchError((_) {}));
     unawaited(integrations.clearAutofill());
     unawaited(bridge.stop());
-    unawaited(transfer.stop());
+    unawaited(nearby.stop());
     unawaited(_clearClipboard());
     for (final c in [keyInput, passwordInput, confirmInput, search]) {
       c.clear();
@@ -1404,14 +1364,18 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             if (vault.unlocked && MediaQuery.sizeOf(context).width > 600) ...[
               const SizedBox(width: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: accentDim,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   'Local • encrypted',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(color: accent),
+                  style: Theme.of(context).textTheme.labelSmall
+                      ?.copyWith(color: accent),
                 ),
               ),
             ],
@@ -1438,6 +1402,11 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                           onPressed: _initialize,
                           child: const Text('Retry'),
                         ),
+                        if (vault.hasVault)
+                          TextButton(
+                            onPressed: () => _act(() => _restore()),
+                            child: const Text('Recover from encrypted backup'),
+                          ),
                       ],
                     ),
             )
@@ -1475,10 +1444,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       gradient: RadialGradient(
         center: const Alignment(0, -0.3),
         radius: 1.2,
-        colors: [
-          accent.withAlpha(10),
-          ink,
-        ],
+        colors: [accent.withAlpha(10), ink],
       ),
     ),
     child: Center(
@@ -1496,180 +1462,184 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                   : vault.hasVault
                   ? 'Welcome back.'
                   : 'Your passwords. Your device.',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.3,
-              ),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w600, letterSpacing: 0.3),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
-          if (generated != null) ...[
-            const InfoBox(
-              text: 'This random key unlocks your vault. Save it privately. Losing all enabled unlock methods means losing access. The app cannot reset them.',
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: accent.withAlpha(40)),
+            if (generated != null) ...[
+              const InfoBox(
+                text: 'This random key unlocks your vault. Save it privately. Losing all enabled unlock methods means losing access. The app cannot reset them.',
               ),
-              child: Text(
-                generated!.display(),
-                style: const TextStyle(fontFamily: 'LocalMono', fontSize: 17, letterSpacing: 1),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton.icon(
-                  onPressed: () => _act(
-                    () => _copy(generated!.display(), enrollment: generated),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: accent.withAlpha(40)),
+                ),
+                child: Text(
+                  generated!.display(),
+                  style: const TextStyle(
+                    fontFamily: 'LocalMono',
+                    fontSize: 17,
+                    letterSpacing: 1,
                   ),
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy master key'),
                 ),
-                TextButton.icon(
-                  onPressed: () => _act(() => _saveKey(generated!)),
-                  icon: const Icon(Icons.save_alt),
-                  label: const Text('Save key file'),
-                ),
-              ],
-            ),
-            VField(
-              controller: confirmInput,
-              label: 'Re-enter the full master key',
-              secret: true,
-              touch: _touch,
-            ),
-            CheckboxListTile(
-              value: acknowledged,
-              onChanged: (v) => setState(() => acknowledged = v ?? false),
-              title: const Text(
-                'I saved my key privately and understand there is no provider reset.',
               ),
-              contentPadding: EdgeInsets.zero,
-            ),
-            SwitchListTile(
-              value: enrollPassword,
-              onChanged: (v) => setState(() => enrollPassword = v),
-              title: const Text('Also enable password unlock'),
-              subtitle: const Text(
-                'An additional unlock method; use a unique passphrase.',
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => _act(
+                      () => _copy(generated!.display(), enrollment: generated),
+                    ),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy master key'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _act(() => _saveKey(generated!)),
+                    icon: const Icon(Icons.save_alt),
+                    label: const Text('Save key file'),
+                  ),
+                ],
               ),
-            ),
-            if (enrollPassword)
               VField(
-                controller: passwordInput,
-                label: 'Unlock password (15+ characters)',
+                controller: confirmInput,
+                label: 'Re-enter the full master key',
                 secret: true,
                 touch: _touch,
               ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: vault.busy ? null : () => _act(_create),
-              child: const Text('Create encrypted vault'),
-            ),
-            TextButton(onPressed: _lock, child: const Text('Cancel')),
-          ] else if (vault.hasVault) ...[
-            const InfoBox(
-              text: 'Unlock locally. Neither your credentials nor your vault are sent to a server.',
-            ),
-            const SizedBox(height: 20),
-            if (vault.passwordEnabled)
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: true, label: Text('Password')),
-                  ButtonSegment(value: false, label: Text('Secure key')),
-                ],
-                selected: {passwordMode},
-                onSelectionChanged: (s) {
-                  keyInput.clear();
-                  passwordInput.clear();
-                  setState(() => passwordMode = s.first);
-                },
+              CheckboxListTile(
+                value: acknowledged,
+                onChanged: (v) => setState(() => acknowledged = v ?? false),
+                title: const Text(
+                  'I saved my key privately and understand there is no provider reset.',
+                ),
+                contentPadding: EdgeInsets.zero,
               ),
-            const SizedBox(height: 16),
-            VField(
-              controller: passwordMode ? passwordInput : keyInput,
-              label: passwordMode ? 'Unlock password' : 'Secure key',
-              secret: true,
-              touch: _touch,
-              onSubmitted: (_) => _act(_unlock),
-            ),
-            if (!passwordMode)
-              TextButton.icon(
-                onPressed: vault.busy ? null : () => _act(() => _importKey()),
-                icon: const Icon(Icons.upload_file),
-                label: const Text('Import master-key .txt file'),
+              SwitchListTile(
+                value: enrollPassword,
+                onChanged: (v) => setState(() => enrollPassword = v),
+                title: const Text('Also enable password unlock'),
+                subtitle: const Text(
+                  'An additional unlock method; use a unique passphrase.',
+                ),
               ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: vault.busy ? null : () => _act(_unlock),
-              child: Text(vault.busy ? 'Opening…' : 'Unlock vault'),
-            ),
-            if (biometricReady)
-              TextButton.icon(
-                onPressed: vault.busy || authenticationPending
-                    ? null
-                    : () => _act(_biometricUnlock),
-                icon: const Icon(Icons.fingerprint),
-                label: const Text('Unlock with biometrics'),
+              if (enrollPassword)
+                VField(
+                  controller: passwordInput,
+                  label: 'Unlock password (15+ characters)',
+                  secret: true,
+                  touch: _touch,
+                ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: vault.busy ? null : () => _act(_create),
+                child: const Text('Create encrypted vault'),
               ),
-            if (deviceUnlockReady)
-              TextButton.icon(
-                onPressed: vault.busy || authenticationPending
-                    ? null
-                    : () => _act(() => _biometricUnlock(deviceLock: true)),
-                icon: const Icon(Icons.phonelink_lock),
-                label: const Text('Unlock with Phone screen lock'),
+              TextButton(onPressed: _lock, child: const Text('Cancel')),
+            ] else if (vault.hasVault) ...[
+              const InfoBox(
+                text: 'Unlock locally. Neither your credentials nor your vault are sent to a server.',
               ),
+              const SizedBox(height: 20),
+              if (vault.passwordEnabled)
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: true, label: Text('Password')),
+                    ButtonSegment(value: false, label: Text('Secure key')),
+                  ],
+                  selected: {passwordMode},
+                  onSelectionChanged: (s) {
+                    keyInput.clear();
+                    passwordInput.clear();
+                    setState(() => passwordMode = s.first);
+                  },
+                ),
+              const SizedBox(height: 16),
+              VField(
+                controller: passwordMode ? passwordInput : keyInput,
+                label: passwordMode ? 'Unlock password' : 'Secure key',
+                secret: true,
+                touch: _touch,
+                onSubmitted: (_) => _act(_unlock),
+              ),
+              if (!passwordMode)
+                TextButton.icon(
+                  onPressed: vault.busy ? null : () => _act(() => _importKey()),
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Import master-key .txt file'),
+                ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: vault.busy ? null : () => _act(_unlock),
+                child: Text(vault.busy ? 'Opening…' : 'Unlock vault'),
+              ),
+              if (biometricReady)
+                TextButton.icon(
+                  onPressed: vault.busy || authenticationPending
+                      ? null
+                      : () => _act(
+                          _biometricUnlock,
+                          failureMessage: 'Fingerprint unlock did not complete. Use your vault password/key, then re-enable fingerprint unlock in Settings.',
+                        ),
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Unlock with biometrics'),
+                ),
+              if (deviceUnlockReady)
+                TextButton.icon(
+                  onPressed: vault.busy || authenticationPending
+                      ? null
+                      : () => _act(
+                          () => _biometricUnlock(deviceLock: true),
+                          failureMessage: 'System unlock did not complete. Use your vault password/key, then re-enable System lock in Settings.',
+                        ),
+                  icon: const Icon(Icons.lock_outline),
+                  label: const Text('Unlock with System lock'),
+                ),
+              const SizedBox(height: 24),
+              TextButton(
+                onPressed: vault.busy ? null : () => _act(() => _restore()),
+                child: const Text('Restore encrypted backup'),
+              ),
+            ] else ...[
+              const InfoBox(
+                text: 'An offline-first vault with no account, no recovery service and no telemetry.',
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _enroll,
+                child: const Text('Create a new vault'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => _act(() => _restore()),
+                child: const Text('Restore encrypted backup'),
+              ),
+            ],
+            if (vault.busy) ...[
+              const SizedBox(height: 16),
+              const LinearProgressIndicator(),
+            ],
             const SizedBox(height: 24),
-            TextButton(
-              onPressed: vault.busy ? null : () => _act(() => _restore()),
-              child: const Text('Restore encrypted backup'),
-            ),
-          ] else ...[
-            const InfoBox(
-              text: 'An offline-first vault with no account, no recovery service and no telemetry.',
-            ),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _enroll,
-              child: const Text('Create a new vault'),
-            ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () => _act(() => _restore()),
-              child: const Text('Restore encrypted backup'),
-            ),
-            TextButton(
-              onPressed: () => _act(() => _receiveTransfer()),
-              child: const Text('Receive encrypted transfer file'),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Encryption cannot protect an unlocked device from malware. This release needs independent security review before use for high-value secrets.',
+                style: TextStyle(fontSize: 12, color: dimText),
+              ),
             ),
           ],
-          if (vault.busy) ...[
-            const SizedBox(height: 16),
-            const LinearProgressIndicator(),
-          ],
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: surface,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Text(
-              'Encryption cannot protect an unlocked device from malware. This release needs independent security review before use for high-value secrets.',
-              style: TextStyle(fontSize: 12, color: dimText),
-            ),
-          ),
-        ],
+        ),
       ),
     ),
-   ),
   );
   Widget _workspace() => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1729,14 +1699,15 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
         children: [
           Text(
             title,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
-            ),
+            style: Theme.of(context).textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w600, letterSpacing: 0.3),
           ),
           if (subtitle != null) ...[
             const SizedBox(height: 6),
-            Text(subtitle, style: const TextStyle(color: dimText, fontSize: 13)),
+            Text(
+              subtitle,
+              style: const TextStyle(color: dimText, fontSize: 13),
+            ),
           ],
           const SizedBox(height: 24),
           ...children,
@@ -1748,11 +1719,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     return FilterChip(
       selected: selected,
       showCheckmark: false,
-      avatar: Icon(
-        icon,
-        size: 16,
-        color: selected ? accent : dimText,
-      ),
+      avatar: Icon(icon, size: 16, color: selected ? accent : dimText),
       label: Text('$label ($count)'),
       labelStyle: TextStyle(
         color: selected ? accent : dimText,
@@ -1761,9 +1728,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       ),
       backgroundColor: surface,
       selectedColor: accentDim,
-      side: BorderSide(
-        color: selected ? accent.withAlpha(90) : borderSubtle,
-      ),
+      side: BorderSide(color: selected ? accent.withAlpha(90) : borderSubtle),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       onSelected: (_) => setState(() {
         filter = index;
@@ -1782,10 +1747,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       child: IntrinsicHeight(
         child: Row(
           children: [
-            Container(
-              width: 4,
-              color: e.favorite ? Colors.amber : itemColor,
-            ),
+            Container(width: 4, color: e.favorite ? Colors.amber : itemColor),
             Expanded(
               child: ListTile(
                 leading: Container(
@@ -1835,11 +1797,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              Icons.timer_outlined,
-                              size: 11,
-                              color: accent,
-                            ),
+                            Icon(Icons.timer_outlined, size: 11, color: accent),
                             SizedBox(width: 3),
                             Text(
                               '2FA',
@@ -1947,192 +1905,258 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
     page = page.clamp(0, pages - 1);
 
     final totalCount = vault.entries.length;
-    final loginCount =
-        vault.entries.where((e) => e.kind == EntryKind.login).length;
-    final noteCount =
-        vault.entries.where((e) => e.kind == EntryKind.note).length;
+    final loginCount = vault.entries
+        .where((e) => e.kind == EntryKind.login)
+        .length;
+    final noteCount = vault.entries
+        .where((e) => e.kind == EntryKind.note)
+        .length;
     final favCount = vault.entries.where((e) => e.favorite).length;
 
-    return _page('Your vault', [
-      Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          SizedBox(
-            width: MediaQuery.sizeOf(context).width < 500 ? 240 : 360,
-            child: TextField(
-              controller: search,
-              decoration: InputDecoration(
-                labelText: 'Search items',
-                prefixIcon: const Icon(
-                  Icons.search_rounded,
-                  size: 20,
-                  color: dimText,
+    return _page(
+      'Your vault',
+      [
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: MediaQuery.sizeOf(context).width < 500 ? 240 : 360,
+              child: TextField(
+                controller: search,
+                decoration: InputDecoration(
+                  labelText: 'Search items',
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    size: 20,
+                    color: dimText,
+                  ),
+                  suffixIcon: search.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(
+                            Icons.clear_rounded,
+                            size: 18,
+                            color: dimText,
+                          ),
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            search.clear();
+                            _touch();
+                            setState(() => page = 0);
+                          },
+                        )
+                      : null,
                 ),
-                suffixIcon: search.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(
-                          Icons.clear_rounded,
-                          size: 18,
-                          color: dimText,
-                        ),
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          search.clear();
-                          _touch();
-                          setState(() => page = 0);
-                        },
-                      )
-                    : null,
+                autocorrect: false,
+                enableSuggestions: false,
+                onChanged: (_) {
+                  _touch();
+                  setState(() => page = 0);
+                },
               ),
-              autocorrect: false,
-              enableSuggestions: false,
-              onChanged: (_) {
-                _touch();
-                setState(() => page = 0);
-              },
             ),
-          ),
-          FilledButton.icon(
-            onPressed: vault.busy ? null : () => _act(() => _edit()),
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Add item'),
-          ),
-        ],
-      ),
-      const SizedBox(height: 16),
-      Wrap(
-        spacing: 8,
-        children: [
-          _filterChip(0, 'All', Icons.apps_rounded, totalCount),
-          _filterChip(1, 'Logins', Icons.key_outlined, loginCount),
-          _filterChip(2, 'Notes', Icons.notes_outlined, noteCount),
-          _filterChip(3, 'Favorites', Icons.star_rounded, favCount),
-        ],
-      ),
-      const SizedBox(height: 16),
-      if (entries.isEmpty)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-          decoration: BoxDecoration(
-            color: panel,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: borderSubtle),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: surface,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  vault.entries.isEmpty
-                      ? Icons.lock_open_rounded
-                      : Icons.search_off_rounded,
-                  size: 36,
-                  color: accent,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                vault.entries.isEmpty
-                    ? 'Your vault is empty'
-                    : 'No matching items found',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                vault.entries.isEmpty
-                    ? 'Add your first login credentials or secure note to get started.'
-                    : 'Try adjusting your search terms or clearing the selected filter.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: dimText, fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              if (vault.entries.isEmpty)
-                FilledButton.icon(
-                  onPressed: vault.busy ? null : () => _act(() => _edit()),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Add your first item'),
-                )
-              else
-                OutlinedButton.icon(
-                  onPressed: () {
-                    search.clear();
-                    setState(() {
-                      filter = 0;
-                      page = 0;
-                    });
-                  },
-                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-                  label: const Text('Clear search & filters'),
-                ),
-            ],
-          ),
-        )
-      else
-        ...entries
-            .skip(page * size)
-            .take(size)
-            .map((e) => _vaultEntryCard(e)),
-      if (entries.isNotEmpty) ...[
+            FilledButton.icon(
+              onPressed: vault.busy ? null : () => _act(() => _edit()),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add login'),
+            ),
+            OutlinedButton.icon(
+              onPressed: vault.busy
+                  ? null
+                  : () => _act(() => _edit(null, EntryKind.note)),
+              icon: const Icon(Icons.note_add_outlined),
+              label: const Text('Add secure note'),
+            ),
+          ],
+        ),
         const SizedBox(height: 16),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            _filterChip(0, 'All', Icons.apps_rounded, totalCount),
+            _filterChip(1, 'Logins', Icons.key_outlined, loginCount),
+            _filterChip(2, 'Notes', Icons.notes_outlined, noteCount),
+            _filterChip(3, 'Favorites', Icons.star_rounded, favCount),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (entries.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
             decoration: BoxDecoration(
               color: panel,
-              borderRadius: BorderRadius.circular(30),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(color: borderSubtle),
             ),
-            child: Row(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                IconButton(
-                  tooltip: 'Previous page',
-                  iconSize: 20,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  onPressed: page > 0 ? () => setState(() => page--) : null,
-                  icon: const Icon(Icons.chevron_left_rounded),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    color: surface,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    vault.entries.isEmpty
+                        ? Icons.lock_open_rounded
+                        : Icons.search_off_rounded,
+                    size: 36,
+                    color: accent,
+                  ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(height: 16),
                 Text(
-                  'Page ${page + 1} / $pages • ${entries.length} items',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  vault.entries.isEmpty
+                      ? 'Your vault is empty'
+                      : 'No matching items found',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: 'Next page',
-                  iconSize: 20,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  onPressed: page + 1 < pages
-                      ? () => setState(() => page++)
-                      : null,
-                  icon: const Icon(Icons.chevron_right_rounded),
+                const SizedBox(height: 8),
+                Text(
+                  vault.entries.isEmpty
+                      ? 'Add your first login credentials or secure note to get started.'
+                      : 'Try adjusting your search terms or clearing the selected filter.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: dimText, fontSize: 13),
                 ),
+                const SizedBox(height: 16),
+                if (vault.entries.isEmpty)
+                  FilledButton.icon(
+                    onPressed: vault.busy ? null : () => _act(() => _edit()),
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Add your first item'),
+                  )
+                else
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      search.clear();
+                      setState(() {
+                        filter = 0;
+                        page = 0;
+                      });
+                    },
+                    icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                    label: const Text('Clear search & filters'),
+                  ),
               ],
             ),
+          )
+        else
+          ...entries
+              .skip(page * size)
+              .take(size)
+              .map((e) => _vaultEntryCard(e)),
+        if (entries.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: panel,
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: borderSubtle),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Previous page',
+                    iconSize: 20,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 34,
+                      minHeight: 34,
+                    ),
+                    onPressed: page > 0 ? () => setState(() => page--) : null,
+                    icon: const Icon(Icons.chevron_left_rounded),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Page ${page + 1} / $pages • ${entries.length} items',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Next page',
+                    iconSize: 20,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 34,
+                      minHeight: 34,
+                    ),
+                    onPressed: page + 1 < pages
+                        ? () => setState(() => page++)
+                        : null,
+                    icon: const Icon(Icons.chevron_right_rounded),
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
+        ],
       ],
-    ], subtitle: '${vault.entries.length} ${vault.entries.length == 1 ? 'item' : 'items'} saved in encrypted storage');
+      subtitle:
+          '${vault.entries.length} ${vault.entries.length == 1 ? 'item' : 'items'} saved in encrypted storage',
+    );
+  }
+
+  Future<void> _importAuthenticators() async {
+    _requireSession();
+    final epoch = secretEpoch;
+    final accounts = await _dialog<List<AuthenticatorAccount>>(
+      AuthenticatorImportDialog(integrations: integrations, touch: _touch),
+    );
+    if (accounts == null || !mounted || epoch != secretEpoch) return;
+    _requireSession();
+    final identities = <String>{};
+    for (final entry in vault.entries.where((entry) => entry.totp.isNotEmpty)) {
+      try {
+        identities.add(totpIdentity(entry.totp));
+      } on FormatException {
+        /* Old invalid entries do not block import. */
+      }
+    }
+    final entries = <VaultEntry>[];
+    for (final account in accounts) {
+      if (!identities.add(totpIdentity(account.uri))) continue;
+      entries.add(
+        VaultEntry(
+          id: randomId(),
+          title: account.title,
+          username: account.username,
+          totp: account.uri,
+          kind: EntryKind.note,
+          updatedAt: now.toUtc(),
+        ),
+      );
+    }
+    final count = await vault.importEntries(entries);
+    _message(
+      'Imported $count authenticator accounts. Existing matching codes were kept.',
+    );
   }
 
   Widget _codesPage() {
-    final totpEntries =
-        vault.entries.where((e) => e.totp.isNotEmpty).toList();
+    final totpEntries = vault.entries.where((e) => e.totp.isNotEmpty).toList();
     return _page(
       'Authenticator codes',
       [
         const InfoBox(
-          text:
-              'Codes are generated offline every 30 seconds. Your device clock must be correct. Saving TOTP beside its password reduces separation between authentication factors.',
+          text: 'Codes are generated offline using each account’s configured period. Your device clock must be correct. Saving TOTP beside its password reduces separation between authentication factors.',
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: vault.busy ? null : () => _act(_importAuthenticators),
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Import from Google Authenticator'),
         ),
         const SizedBox(height: 16),
         if (totpEntries.isEmpty)
@@ -2164,7 +2188,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Add a Base32 secret or otpauth URI in an item’s Authenticator section to generate 2FA verification codes.',
+                  'Import your Google Authenticator accounts above, or scan a QR in an item’s 2FA tab.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: dimText, fontSize: 13),
                 ),
@@ -2178,10 +2202,12 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           '${totpEntries.length} ${totpEntries.length == 1 ? 'code' : 'codes'} active',
     );
   }
+
   Widget _securityPage() {
     final h = HealthReport(vault.entries);
-    final totalLogins =
-        vault.entries.where((e) => e.kind == EntryKind.login).length;
+    final totalLogins = vault.entries
+        .where((e) => e.kind == EntryKind.login)
+        .length;
     final totalIssues = h.short.length + h.reused.length + h.wordOnly.length;
     final isHealthy = totalIssues == 0 && totalLogins > 0;
 
@@ -2205,9 +2231,11 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                 size: 20,
               ),
               const SizedBox(width: 10),
-              Text(
-                emptyMessage,
-                style: const TextStyle(color: successColor, fontSize: 13),
+              Expanded(
+                child: Text(
+                  emptyMessage,
+                  style: const TextStyle(color: successColor, fontSize: 13),
+                ),
               ),
             ],
           )
@@ -2243,142 +2271,150 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       ],
     );
 
-    final backupStatusText = backupError ??
+    final backupStatusText =
+        backupError ??
         (lastAutomaticBackup != null
             ? 'Automatic encrypted copy saved this session.'
             : vault.preferences.lastBackupAt == null
             ? 'No manual export recorded. Export and verify a backup.'
             : 'Last manual export: ${vault.preferences.lastBackupAt!.toLocal()}');
-    final isBackupOverdue = vault.preferences.lastBackupAt == null ||
+    final isBackupOverdue =
+        vault.preferences.lastBackupAt == null ||
         now.difference(vault.preferences.lastBackupAt!).inDays >=
             vault.preferences.backupReminderDays;
 
-    return _page('Security overview', [
-      Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: panel,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isHealthy
-                ? successColor.withAlpha(60)
-                : (totalIssues > 0
-                    ? warningColor.withAlpha(60)
-                    : borderSubtle),
+    return _page(
+      'Security overview',
+      [
+        Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isHealthy
+                  ? successColor.withAlpha(60)
+                  : (totalIssues > 0
+                        ? warningColor.withAlpha(60)
+                        : borderSubtle),
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: (isHealthy
-                    ? successColor
-                    : (totalIssues > 0 ? warningColor : accent)).withAlpha(25),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isHealthy
-                    ? Icons.verified_user_rounded
-                    : (totalIssues > 0
-                        ? Icons.security_update_warning_rounded
-                        : Icons.shield_outlined),
-                size: 32,
-                color: isHealthy
-                    ? successColor
-                    : (totalIssues > 0 ? warningColor : accent),
-              ),
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isHealthy
-                        ? 'All logins meet security checks'
-                        : totalLogins == 0
-                        ? 'No logins evaluated'
-                        : '$totalIssues security ${totalIssues == 1 ? 'alert' : 'alerts'} detected',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$totalLogins total accounts • ${h.short.length} short • ${h.reused.length} reused • ${h.wordOnly.length} letters-only',
-                    style: const TextStyle(color: dimText, fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      const InfoBox(
-        text:
-            'These checks run entirely on this device. They are limited heuristics, not a breach check or a guarantee of password strength. Use a unique, long password for each account.',
-      ),
-      const SizedBox(height: 16),
-      group(
-        title: 'Short passwords (${h.short.length})',
-        entries: h.short,
-        icon: Icons.lock_clock,
-        color: dangerColor,
-        emptyMessage: 'No short passwords found (all >= 12 chars).',
-      ),
-      group(
-        title: 'Reused passwords (${h.reused.length})',
-        entries: h.reused,
-        icon: Icons.repeat_rounded,
-        color: warningColor,
-        emptyMessage: 'No reused passwords found.',
-      ),
-      group(
-        title: 'Letters-only passwords (${h.wordOnly.length})',
-        entries: h.wordOnly,
-        icon: Icons.text_fields_rounded,
-        color: warningColor,
-        emptyMessage: 'No letters-only passwords found.',
-      ),
-      SectionCard(
-        title: 'Backup status',
-        icon: Icons.backup_rounded,
-        accentColor: isBackupOverdue ? warningColor : successColor,
-        children: [
-          Row(
+          child: Row(
             children: [
-              Icon(
-                isBackupOverdue
-                    ? Icons.warning_amber_rounded
-                    : Icons.check_circle_outline_rounded,
-                color: isBackupOverdue ? warningColor : successColor,
-                size: 20,
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color:
+                      (isHealthy
+                              ? successColor
+                              : (totalIssues > 0 ? warningColor : accent))
+                          .withAlpha(25),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isHealthy
+                      ? Icons.verified_user_rounded
+                      : (totalIssues > 0
+                            ? Icons.security_update_warning_rounded
+                            : Icons.shield_outlined),
+                  size: 32,
+                  color: isHealthy
+                      ? successColor
+                      : (totalIssues > 0 ? warningColor : accent),
+                ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 18),
               Expanded(
-                child: Text(
-                  backupStatusText,
-                  style: TextStyle(
-                    color: isBackupOverdue ? warningColor : null,
-                    fontSize: 13,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isHealthy
+                          ? 'All logins meet security checks'
+                          : totalLogins == 0
+                          ? 'No logins evaluated'
+                          : '$totalIssues security ${totalIssues == 1 ? 'alert' : 'alerts'} detected',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$totalLogins total accounts • ${h.short.length} short • ${h.reused.length} reused • ${h.wordOnly.length} letters-only',
+                      style: const TextStyle(color: dimText, fontSize: 13),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          if (isBackupOverdue) ...[
-            const SizedBox(height: 10),
-            const Text(
-              'Backup reminder: export an independent copy and verify it.',
-              style: TextStyle(fontSize: 12, color: dimText),
+        ),
+        const InfoBox(
+          text: 'These checks run entirely on this device. They are limited heuristics, not a breach check or a guarantee of password strength. Use a unique, long password for each account.',
+        ),
+        const SizedBox(height: 16),
+        group(
+          title: 'Short passwords (${h.short.length})',
+          entries: h.short,
+          icon: Icons.lock_clock,
+          color: dangerColor,
+          emptyMessage: 'No short passwords found (all >= 16 chars).',
+        ),
+        group(
+          title: 'Reused passwords (${h.reused.length})',
+          entries: h.reused,
+          icon: Icons.repeat_rounded,
+          color: warningColor,
+          emptyMessage: 'No reused passwords found.',
+        ),
+        group(
+          title: 'Letters-only passwords (${h.wordOnly.length})',
+          entries: h.wordOnly,
+          icon: Icons.text_fields_rounded,
+          color: warningColor,
+          emptyMessage: 'No letters-only passwords found.',
+        ),
+        SectionCard(
+          title: 'Backup status',
+          icon: Icons.backup_rounded,
+          accentColor: isBackupOverdue ? warningColor : successColor,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isBackupOverdue
+                      ? Icons.warning_amber_rounded
+                      : Icons.check_circle_outline_rounded,
+                  color: isBackupOverdue ? warningColor : successColor,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    backupStatusText,
+                    style: TextStyle(
+                      color: isBackupOverdue ? warningColor : null,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
             ),
+            if (isBackupOverdue) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'Backup reminder: export an independent copy and verify it.',
+                style: TextStyle(fontSize: 12, color: dimText),
+              ),
+            ],
           ],
-        ],
-      ),
-    ], subtitle: 'Offline heuristic checks for password health and backup freshness');
+        ),
+      ],
+      subtitle:
+          'Offline heuristic checks for password health and backup freshness',
+    );
   }
 
   Widget _backupPage() => _page('Backups & transfers', [
@@ -2388,8 +2424,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       accentColor: accent,
       children: [
         const InfoBox(
-          text:
-              'A backup is the .svlt file containing your encrypted entries. A master-key .txt file alone has no passwords to restore.',
+          text: 'A backup is the .svlt file containing your encrypted entries. A master-key .txt file alone has no passwords to restore.',
         ),
         const SizedBox(height: 16),
         Wrap(
@@ -2454,13 +2489,15 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
         ),
         if (backupError != null) ...[
           const SizedBox(height: 10),
-          Text(backupError!, style: const TextStyle(color: warningColor, fontSize: 13)),
+          Text(
+            backupError!,
+            style: const TextStyle(color: warningColor, fontSize: 13),
+          ),
         ],
         if (vault.preferences.backupDirectory == 'browser-storage') ...[
           const SizedBox(height: 10),
           const InfoBox(
-            text:
-                'Browser copies share the same storage failure risk as the main database. Export independent backups periodically.',
+            text: 'Browser copies share the same storage failure risk as the main database. Export independent backups periodically.',
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
@@ -2514,43 +2551,34 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       ],
     ),
     SectionCard(
-      title: 'Paired device transfer',
+      title: 'Nearby device transfer',
       icon: Icons.sync_alt_rounded,
       accentColor: noteColor,
       children: [
-        const InfoBox(
-          text:
-              'Transfers are authenticated and encrypted with a 5-minute private code. They move an encrypted vault snapshot, never your secure key. Receiving a matching vault shows additions, conflicts, and deletions before merging.',
+        InfoBox(
+          text: nearby.available
+              ? 'Send selected items or all items directly to another device running Spar Vault. Both devices must be unlocked and on the same Wi-Fi or hotspot. Open Receive on the other device, then choose it from Send.'
+              : 'Nearby transfer requires the native app. Use Export and Restore encrypted backup in the browser.',
         ),
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            OutlinedButton.icon(
-              onPressed: () => _act(() => _sendTransfer()),
-              icon: const Icon(Icons.upload_file_rounded),
-              label: const Text('Send transfer file'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () => _act(() => _receiveTransfer()),
-              icon: const Icon(Icons.file_download_rounded),
-              label: const Text('Receive transfer file'),
-            ),
-            if (transfer.canHost) ...[
+        if (nearby.available) ...[
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
               OutlinedButton.icon(
-                onPressed: () => _act(() => _sendTransfer(lan: true)),
-                icon: const Icon(Icons.wifi_rounded),
-                label: const Text('Send over local network'),
+                onPressed: () => _act(_sendNearby),
+                icon: const Icon(Icons.send_outlined),
+                label: const Text('Send'),
               ),
               OutlinedButton.icon(
-                onPressed: () => _act(() => _receiveTransfer(lan: true)),
-                icon: const Icon(Icons.wifi_find_rounded),
-                label: const Text('Receive over local network'),
+                onPressed: () => _act(_receiveNearby),
+                icon: const Icon(Icons.wifi_tethering),
+                label: const Text('Receive'),
               ),
             ],
-          ],
-        ),
+          ),
+        ],
       ],
     ),
   ], subtitle: 'Manage encrypted archives and device synchronization');
@@ -2703,12 +2731,12 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             ),
           ],
         ),
-        if (integrations.isAndroid) ...[
+        if (integrations.isAndroid || integrations.isDesktop) ...[
           const SizedBox(height: 18),
           const Divider(),
           const SizedBox(height: 12),
           Text(
-            deviceSecurity.explanation(false),
+            deviceSecurity.explanation(true),
             style: const TextStyle(fontSize: 13, color: dimText),
           ),
           const SizedBox(height: 12),
@@ -2716,13 +2744,14 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             spacing: 8,
             runSpacing: 8,
             children: [
-              FilledButton.tonalIcon(
-                onPressed: authenticationPending
-                    ? null
-                    : () => _act(_enableBiometrics),
-                icon: const Icon(Icons.fingerprint),
-                label: const Text('Enable biometric unlock'),
-              ),
+              if (integrations.isAndroid)
+                FilledButton.tonalIcon(
+                  onPressed: authenticationPending
+                      ? null
+                      : () => _act(_enableBiometrics),
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Enable biometric unlock'),
+                ),
               if (biometricReady)
                 OutlinedButton(
                   onPressed: authenticationPending
@@ -2738,11 +2767,11 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                 onPressed: authenticationPending
                     ? null
                     : () => _act(() => _enableBiometrics(deviceLock: true)),
-                icon: const Icon(Icons.phonelink_lock),
+                icon: const Icon(Icons.lock_outline),
                 label: Text(
                   deviceUnlockReady
-                      ? 'Replace Phone screen lock binding'
-                      : 'Enable Phone screen lock',
+                      ? 'Replace System lock binding'
+                      : 'Enable System lock',
                 ),
               ),
               if (deviceUnlockReady)
@@ -2753,14 +2782,14 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                           await integrations.clearDeviceUnlock();
                           await _refreshDeviceSecurity();
                         }),
-                  child: const Text('Remove Phone screen lock'),
+                  child: const Text('Remove System lock'),
                 ),
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Phone screen lock uses Android’s fingerprint or PIN/pattern/password prompt. It is local to this phone and is not a synced passkey.',
-            style: TextStyle(fontSize: 12, color: dimText),
+          Text(
+            deviceSecurity.systemDescription,
+            style: const TextStyle(fontSize: 12, color: dimText),
           ),
           if (integrationError != null) ...[
             const SizedBox(height: 6),
@@ -2773,7 +2802,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           TextButton.icon(
             onPressed: () => _act(_refreshDeviceSecurity),
             icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh Android status'),
+            label: const Text('Refresh authentication status'),
           ),
         ],
       ],
@@ -2839,8 +2868,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           ],
           const SizedBox(height: 8),
           const InfoBox(
-            text:
-                'Bind native apps to their installed signing certificates in each item. Android website autofill is refused because its form API omits the port. Use native app bindings; desktop/web website fill uses the bundled extension.',
+            text: 'Bind native apps to their installed signing certificates in each item. Android website autofill is refused because its form API omits the port. Use native app bindings; desktop/web website fill uses the bundled extension.',
           ),
           const SizedBox(height: 12),
           FilledButton.tonal(
@@ -2850,8 +2878,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
         ],
         if (!integrations.isAndroid) ...[
           const InfoBox(
-            text:
-                'Install the bundled Chrome/Edge extension. Configure its 32-letter extension ID here. Native desktop also needs the bundled native messaging host; web mode needs this vault tab open.',
+            text: 'Install the bundled Chrome/Edge extension. Configure its 32-letter extension ID here. Native desktop also needs the bundled native messaging host; web mode needs this vault tab open.',
           ),
           const SizedBox(height: 12),
           FilledButton.tonalIcon(
@@ -2926,9 +2953,17 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Spar Vault 0.2 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
+            'Spar Vault 0.2.4+7 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
             style: TextStyle(fontSize: 12, color: dimText, height: 1.5),
             textAlign: TextAlign.center,
+          ),
+          TextButton(
+            onPressed: () => showLicensePage(
+              context: context,
+              applicationName: 'Spar Vault',
+              applicationVersion: '0.2.4+7',
+            ),
+            child: const Text('Open-source licenses'),
           ),
         ],
       ),

@@ -15,7 +15,7 @@ import android.widget.*
 class AutofillConfirmActivity:Activity() {
     private val handler=Handler(Looper.getMainLooper())
     override fun onCreate(state:Bundle?) {
-        super.onCreate(state);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onCreate(state);window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val request=AutofillCache.take(intent.getStringExtra("token")?:"")?:run{finish();return}
         val matches=AutofillCache.matches(this,request.caller,request.origin)
         if(matches.isEmpty()||!AutofillCache.valid(request)){finish();return}

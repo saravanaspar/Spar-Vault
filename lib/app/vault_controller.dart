@@ -130,8 +130,10 @@ class VaultController extends ChangeNotifier {
   Future<void> initialize() async {
     final snapshot = await store.read();
     if (_disposed) return;
-    if (snapshot != null) VaultBundle.parse(snapshot);
+    // Retain the exact unreadable snapshot for compare-and-swap recovery.
+    // Never pretend corrupt storage is an empty vault.
     _setSnapshot(snapshot);
+    if (snapshot != null) VaultBundle.parse(snapshot);
     initialized = true;
     notifyListeners();
   }
@@ -309,6 +311,7 @@ class VaultController extends ChangeNotifier {
           verified.key = null;
           _pendingKey = null;
           _data = restored;
+          initialized = true;
         } catch (_) {
           verified.destroy();
           _pendingKey = null;
@@ -389,7 +392,11 @@ class VaultController extends ChangeNotifier {
     final tombstones = Map<String, DateTime>.from(_data!.tombstones)
       ..[id] = DateTime.now().toUtc();
     // Bound deletion metadata; old backups are never treated as proof of absence.
-    if (tombstones.length > maxItems) tombstones.remove(tombstones.keys.first);
+    if (tombstones.length > maxItems) {
+      throw const FormatException(
+        'Deletion record limit reached. Export a backup before starting a new vault; existing records are retained to prevent old transfers resurrecting deleted items.',
+      );
+    }
     await _commit(
       VaultData(
         createdAt: _data!.createdAt,
@@ -399,6 +406,38 @@ class VaultController extends ChangeNotifier {
       ),
       epoch,
     );
+  });
+  Future<int> importEntries(List<VaultEntry> incoming) => _operation((
+    epoch,
+  ) async {
+    if (!unlocked) throw const SessionExpired();
+    if (incoming.length > maxItems) {
+      throw const FormatException('Too many incoming items.');
+    }
+    final local = {for (final entry in entries) entry.id: entry};
+    var count = 0;
+    for (final entry in incoming) {
+      final old = local[entry.id];
+      if (old != null && jsonEncode(old.toJson()) == jsonEncode(entry.toJson())) {
+        continue;
+      }
+      final value = old != null || _data!.tombstones.containsKey(entry.id)
+          ? VaultEntry.fromJson({...entry.toJson(), 'id': randomId()})
+          : entry;
+      local[value.id] = value;
+      count++;
+    }
+    if (count == 0) return 0;
+    await _commit(
+      VaultData(
+        createdAt: _data!.createdAt,
+        entries: local.values.toList(),
+        preferences: preferences,
+        tombstones: _data!.tombstones,
+      ),
+      epoch,
+    );
+    return count;
   });
   Future<void> updatePreferences(VaultPreferences prefs) =>
       _operation((epoch) async {

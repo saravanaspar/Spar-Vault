@@ -1,0 +1,16 @@
+name: Bug report
+description: Report a reproducible defect without sharing secrets
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include version, OS/device, steps, expected behavior and actual behavior. Redact secrets and account data.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Checks already performed
+      description: Include redacted errors and test results. Do not attach vaults or key files.
+

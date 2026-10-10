@@ -16,14 +16,16 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val biometric by lazy { BiometricKey(this) }
     private val deviceLock by lazy { BiometricKey(this, true) }
+    private val qr by lazy { AndroidQr(this) }
+    private val nearby by lazy { AndroidNearby(this) }
     private var networkResult: MethodChannel.Result?=null
     private var directoryResult: MethodChannel.Result?=null
     private var autofillResult: MethodChannel.Result?=null
     private var setupResult: MethodChannel.Result?=null
     private var setupDeviceLock=false
     override fun onCreate(savedInstanceState: Bundle?) {
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         super.onCreate(savedInstanceState)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
@@ -34,6 +36,12 @@ class MainActivity : FlutterActivity() {
                     "biometricEnabled"->result.success(biometric.enabled(call.argument<String>("vaultId")?:""))
                     "deviceSecurityStatus"->result.success(mapOf("biometric" to biometric.status(),"screenLock" to deviceLock.status(),"autofillSupported" to autofillSupported(),"autofillSelected" to autofillSelected()))
                     "deviceName"->result.success(deviceName())
+                    "installedApps"->result.success(installedApps())
+                    "scanTotpQr"->qr.scan(false,result)
+                    "readTotpQrImage"->qr.scan(true,result)
+                    "nearbyAdvertise"->nearby.advertise(call.arguments as Map<*,*>,result)
+                    "nearbyScan"->nearby.scan(result)
+                    "nearbyStop"->{nearby.stop();result.success(null)}
                     "deviceUnlockEnabled"->result.success(deviceLock.enabled(call.argument<String>("vaultId")?:""))
                     "enableBiometric", "enableDeviceUnlock"->{val bytes=call.argument<ByteArray>("key")?:byteArrayOf();if(biometric.prompting||deviceLock.prompting){bytes.fill(0);result.error("busy","An Android authentication prompt is already open.",null)}else (if(call.method=="enableDeviceUnlock")deviceLock else biometric).enable(call.argument<String>("vaultId")?:"",bytes,result)}
                     "unlockBiometric", "unlockDevice"->{if(biometric.prompting||deviceLock.prompting)result.error("busy","An Android authentication prompt is already open.",null)else (if(call.method=="unlockDevice")deviceLock else biometric).unlock(call.argument<String>("vaultId")?:"",result)}
@@ -55,6 +63,14 @@ class MainActivity : FlutterActivity() {
         }
     }
     private fun autofillSupported() = Build.VERSION.SDK_INT>=26 && getSystemService(AutofillManager::class.java)?.isAutofillSupported==true
+    private fun installedApps():List<Map<String,String>> {
+        val intent=Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return packageManager.queryIntentActivities(intent,0).mapNotNull { info ->
+            val app=info.activityInfo?.applicationInfo ?: return@mapNotNull null
+            if(app.packageName==packageName) return@mapNotNull null
+            mapOf("package" to app.packageName,"name" to app.loadLabel(packageManager).toString().replace(Regex("[\\p{Cntrl}]"),"").take(200))
+        }.distinctBy{it["package"]}.sortedBy{it["name"]?.lowercase()}.take(2000)
+    }
     private fun deviceName():String {
         val name=try{Settings.Global.getString(contentResolver,"device_name")}catch(_:Exception){null}
         return (name ?: "${Build.MANUFACTURER} ${Build.MODEL}").replace(Regex("[\\p{Cntrl}]"),"").trim().take(80).ifEmpty{"Android phone"}
@@ -88,6 +104,7 @@ class MainActivity : FlutterActivity() {
     }
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
+        if(qr.onResult(requestCode,resultCode,data))return
         if(requestCode==4103){val result=autofillResult;autofillResult=null;result?.success(autofillSelected());return}
         if(requestCode==4104){val result=setupResult;setupResult=null;result?.success((if(setupDeviceLock)deviceLock else biometric).available());return}
         if(requestCode==4101){val result=directoryResult;directoryResult=null;val uri=data?.data
@@ -110,5 +127,5 @@ class MainActivity : FlutterActivity() {
         contentResolver.query(children,arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE),null,null,null)?.use{c->while(c.moveToNext()){if(pattern.matches(c.getString(1))&&c.getString(2)!="vnd.android.document/directory")files.add(c.getString(1) to c.getString(0))}}
         files.sortedByDescending{it.first}.drop(5).forEach{DocumentsContract.deleteDocument(contentResolver,DocumentsContract.buildDocumentUriUsingTree(tree,it.second))}
     }
-    override fun onDestroy(){biometric.dispose();deviceLock.dispose();AutofillCache.clear();directoryResult?.success(null);directoryResult=null;networkResult?.success(false);networkResult=null;autofillResult?.success(false);autofillResult=null;setupResult?.success(false);setupResult=null;super.onDestroy()}
+    override fun onDestroy(){nearby.stop();qr.dispose();biometric.dispose();deviceLock.dispose();AutofillCache.clear();directoryResult?.success(null);directoryResult=null;networkResult?.success(false);networkResult=null;autofillResult?.success(false);autofillResult=null;setupResult?.success(false);setupResult=null;super.onDestroy()}
 }

@@ -1,0 +1,139 @@
+name: Build and release
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  FLUTTER_VERSION: '3.47.6'
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve both locked packages before root analysis
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd packages/vault_core && dart pub get --enforce-lockfile)
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+          (cd packages/vault_core && dart analyze && dart test)
+          python3 -m unittest discover -s browser/tests -v
+          python3 -m unittest discover -s scripts/tests -v
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: android
+            os: ubuntu-24.04
+          - target: linux
+            os: ubuntu-24.04
+          - target: windows
+            os: windows-2025
+          - target: macos
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Linux build dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libfido2-dev libssl-dev
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        if: matrix.target == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: Prepare trusted Android signing
+        id: signing
+        if: matrix.target == 'android' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: python3 scripts/release_tools.py signing
+      - name: Build Android
+        if: matrix.target == 'android'
+        env:
+          ANDROID_MODE: ${{ steps.signing.outputs.mode || 'debug' }}
+        run: |
+          flutter build apk --"$ANDROID_MODE"
+          python3 scripts/release_tools.py package --target android --mode "$ANDROID_MODE"
+      - name: Build desktop
+        if: matrix.target != 'android'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          flutter build "$TARGET" --release
+          python3 scripts/release_tools.py package --target "$TARGET"
+      - name: Upload complete application bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  ci:
+    name: ci
+    if: always()
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require validation and every platform build
+        env:
+          VALIDATION: ${{ needs.validate.result }}
+          BUILDS: ${{ needs.build.result }}
+        run: test "$VALIDATION" = success && test "$BUILDS" = success
+
+  release:
+    needs: ci
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Tag tested version and publish all bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_tools.py publish
+

@@ -71,7 +71,7 @@ void main() {
       await tester.ensureVisible(find.text('Create encrypted vault'));
       await tester.tap(find.text('Create encrypted vault'));
       await tester.pumpAndSettle();
-      expect(find.text('Add item'), findsOneWidget);
+      expect(find.text('Add login'), findsOneWidget);
       expect(store.value != null, isTrue);
       expect(find.text('Copy master key'), findsNothing);
       expect(find.text('Save key file'), findsNothing);

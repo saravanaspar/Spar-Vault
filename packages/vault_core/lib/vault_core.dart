@@ -8,3 +8,7 @@ export 'src/store.dart';
 export 'src/bundle.dart';
 export 'src/totp.dart';
 export 'src/transfer.dart';
+export 'src/authenticator_import.dart';
+export 'src/nearby.dart';
+
+export 'src/system_key.dart';

@@ -6,27 +6,71 @@ import 'package:vault_core/vault_core.dart';
 
 import '../features/files.dart';
 import 'device_security.dart';
+import 'system_lock_native.dart';
+import 'installed_app.dart';
 import 'picker_options.dart';
 
 class PlatformIntegrations {
+  final _systemLock = DesktopSystemLock();
+  Future<void> nearbyPermission() async {
+    if (isAndroid &&
+        await channel.invokeMethod<bool>('localNetworkPermission') != true) {
+      throw const FormatException(
+        'Allow local network access to find and transfer to nearby devices.',
+      );
+    }
+  }
+
+  Future<void> nearbyAdvertise(Map<String, Object> metadata) async {
+    await channel.invokeMethod<void>('nearbyAdvertise', metadata);
+  }
+
+  Future<List<Map>> nearbyScan() async =>
+      (await channel.invokeListMethod<dynamic>('nearbyScan') ?? []).cast<Map>();
+  Future<void> nearbyStop() async {
+    await channel.invokeMethod<void>('nearbyStop');
+  }
+
+  Future<List<InstalledApp>> installedApps() async => !isAndroid
+      ? []
+      : (await channel.invokeListMethod<dynamic>('installedApps') ?? [])
+            .map((value) => InstalledApp.fromMap(value as Map))
+            .toList();
+  Future<List<String>?> scanTotpQr({bool image = false}) async {
+    if (!isAndroid) {
+      throw const FormatException(
+        'Camera QR scanning currently requires Android. Paste an authenticator URI instead.',
+      );
+    }
+    final result = await channel.invokeListMethod<String>(
+      image ? 'readTotpQrImage' : 'scanTotpQr',
+    );
+    return result;
+  }
+
   Future<List<String>> backupCopies(String id) async => [];
   Future<String> readBackupCopy(String name) async =>
       throw const FormatException('Select the backup using the file picker.');
   static const channel = MethodChannel('spar/integrations');
   bool get isAndroid => Platform.isAndroid;
-  bool get isDesktop => Platform.isLinux || Platform.isWindows;
+  bool get isDesktop =>
+      Platform.isLinux || Platform.isWindows || Platform.isMacOS;
   Future<DeviceSecurityStatus> deviceSecurityStatus() async => isAndroid
       ? DeviceSecurityStatus.fromMap(
           await channel.invokeMapMethod<dynamic, dynamic>(
             'deviceSecurityStatus',
           ),
         )
+      : isDesktop
+      ? await _systemLock.status()
       : const DeviceSecurityStatus();
   Future<bool> requestAuthenticationSetup(bool deviceLock) async => isAndroid
       ? await channel.invokeMethod<bool>('requestAuthenticationSetup', {
               'deviceLock': deviceLock,
             }) ??
             false
+      : isDesktop && deviceLock
+      ? await _systemLock.setup()
       : false;
   Future<String> deviceName() async => isAndroid
       ? await channel.invokeMethod<String>('deviceName') ?? 'Android phone'
@@ -36,11 +80,14 @@ class PlatformIntegrations {
               'vaultId': id,
             }) ??
             false
+      : isDesktop
+      ? await _systemLock.enabled(id)
       : false;
   Future<void> enableDeviceUnlock(String id, Uint8List key) async {
+    if (isDesktop) return _systemLock.enable(id, key);
     if (!isAndroid) {
       throw const FormatException(
-        'Phone screen lock is available on Android only.',
+        'System lock is unavailable on this platform.',
       );
     }
     await channel.invokeMethod<void>('enableDeviceUnlock', {
@@ -51,8 +98,11 @@ class PlatformIntegrations {
 
   Future<Uint8List?> unlockDevice(String id) async => isAndroid
       ? await channel.invokeMethod<Uint8List>('unlockDevice', {'vaultId': id})
+      : isDesktop
+      ? await _systemLock.unlock(id)
       : null;
   Future<void> clearDeviceUnlock() async {
+    if (isDesktop) return _systemLock.clear();
     if (isAndroid) await channel.invokeMethod<void>('clearDeviceUnlock');
   }
 
@@ -83,6 +133,7 @@ class PlatformIntegrations {
         })
       : null;
   Future<void> cancelBiometric() async {
+    if (isDesktop) await _systemLock.cancel();
     if (isAndroid) await channel.invokeMethod<void>('cancelBiometric');
   }
 

@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:spar_vault/main.dart';
 import 'package:spar_vault/platform/integrations.dart';
 import 'package:spar_vault/platform/local_network.dart';
-import 'package:spar_vault/ui/widgets.dart';
 import 'package:vault_core/vault_core.dart';
 
 class MemoryStore implements VaultStore {
@@ -187,44 +186,6 @@ void main() {
   });
 
   testWidgets(
-    'receive dialog handles phone keyboard, cancel and invalid code without UI errors',
-    (tester) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpWidget(SparVaultApp(store: MemoryStore()));
-      await tester.pumpAndSettle();
-      await click(tester, 'Receive encrypted transfer file');
-      await tester.enterText(
-        find.descendant(
-          of: find.byType(TransferCodeDialog),
-          matching: find.byType(TextField),
-        ),
-        'invalid private code',
-      );
-      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
-      await tester.pumpAndSettle();
-      await click(tester, 'Continue');
-      expect(
-        find.text('Use the full transfer code from the sending device.'),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-      tester.view.resetViewInsets();
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
-      await click(tester, 'Receive encrypted transfer file');
-      await tester.enterText(find.byType(TextField), 'discard me');
-      await click(tester, 'Cancel');
-      expect(find.text('discard me'), findsNothing);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets(
     'missing fingerprint enrollment opens Android setup before any wrapping attempt',
     (tester) async {
       await wide(tester);
@@ -293,7 +254,7 @@ void main() {
       await tester.pumpAndSettle();
       await unlock(tester, key);
       await settings(tester);
-      await click(tester, 'Enable Phone screen lock');
+      await click(tester, 'Enable System lock');
       await click(tester, 'Continue');
       expect(integrations.enrollments, 1);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
@@ -305,7 +266,7 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(integrations.deviceBound, isTrue);
-      expect(find.text('Remove Phone screen lock'), findsOneWidget);
+      expect(find.text('Remove System lock'), findsOneWidget);
       expect(integrations.passedKey!.every((b) => b == 0), isTrue);
       // A subsequent actual minimize still locks immediately.
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
@@ -368,7 +329,7 @@ void main() {
         SparVaultApp(store: store, integrations: integrations),
       );
       await tester.pumpAndSettle();
-      await click(tester, 'Unlock with Phone screen lock');
+      await click(tester, 'Unlock with System lock');
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await tester.pump();
       final bytes = key.copyBytes();
@@ -385,6 +346,32 @@ void main() {
       key.destroy();
     },
   );
+
+  testWidgets('phone unlock accepts a read-only platform key buffer', (
+    tester,
+  ) async {
+    await wide(tester);
+    final key = MasterKey.generate(),
+        integrations = AndroidIntegrations()
+          ..deviceBound = true
+          ..unlocking = Completer<Uint8List?>();
+    final store = await seed(key), encrypted = store.value;
+    await tester.pumpWidget(
+      SparVaultApp(store: store, integrations: integrations),
+    );
+    await tester.pumpAndSettle();
+    await click(tester, 'Unlock with System lock');
+    final raw = key.copyBytes();
+    integrations.unlocking!.complete(raw.asUnmodifiableView());
+    await tester.pumpAndSettle();
+    expect(find.text('Private account'), findsOneWidget);
+    expect(find.textContaining('Operation failed'), findsNothing);
+    expect(store.value, encrypted);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    raw.fillRange(0, raw.length, 0);
+    key.destroy();
+  });
 
   testWidgets(
     'autofill asks Android on first enable and stays off after rejection',

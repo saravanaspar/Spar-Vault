@@ -39,6 +39,50 @@ void main() {
   });
   tearDown(() => vault.dispose());
 
+  test(
+    'nearby import preserves local entries/preferences and copies conflicts',
+    () async {
+      await vault.upsert(entry);
+      await vault.updatePreferences(
+        vault.preferences.copyWith(idleMinutes: 15),
+      );
+      final before = vault.vaultId;
+      expect(await vault.importEntries([entry]), 0);
+      final incoming = VaultEntry(
+        id: entry.id,
+        title: 'Other device account',
+        password: 'OTHER',
+        updatedAt: DateTime.utc(2026),
+      );
+      expect(await vault.importEntries([incoming]), 1);
+      expect(vault.entries, hasLength(2));
+      expect(
+        vault.entries.singleWhere((e) => e.id == entry.id).password,
+        entry.password,
+      );
+      expect(
+        vault.entries.singleWhere((e) => e.title == incoming.title).id,
+        isNot(entry.id),
+      );
+      expect(vault.preferences.idleMinutes, 15);
+      expect(vault.vaultId, before);
+      final snapshot = store.snapshot;
+      store.failWrites = true;
+      await expectLater(
+        vault.importEntries([
+          VaultEntry(
+            id: 'c' * 32,
+            title: 'Failed',
+            updatedAt: DateTime.utc(2026),
+          ),
+        ]),
+        throwsStateError,
+      );
+      expect(vault.entries, hasLength(2));
+      expect(store.snapshot, snapshot);
+    },
+  );
+
   test('lock clears entries and destroys the unlock key', () async {
     await vault.upsert(entry);
     vault.lock();
