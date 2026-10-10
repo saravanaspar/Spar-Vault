@@ -16,6 +16,118 @@ class TestStore implements VaultStore {
 }
 
 void main() {
+  testWidgets('saved mobile login supports reveal, clipboard expiry and edit', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    final store = TestStore(), key = MasterKey.generate();
+    final original = VaultEntry(
+      id: 'a' * 32,
+      title: 'Saved email',
+      username: 'synthetic@example.test',
+      password: 'Synthetic password 123!',
+      updatedAt: DateTime.utc(2026),
+    );
+    store.value = await VaultCodec().seal(
+      VaultData(createdAt: DateTime.utc(2026), entries: [original]),
+      key,
+      vaultId: 'b' * 32,
+      revision: 1,
+    );
+    String? clipboard;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboard = (call.arguments as Map)['text'] as String;
+        }
+        if (call.method == 'Clipboard.getData') return {'text': clipboard};
+        return null;
+      },
+    );
+    addTearDown(() {
+      key.destroy();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+    await tester.pumpWidget(SparVaultApp(store: store));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, key.display());
+    await tester.tap(find.text('Unlock vault'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text(original.title),
+      160,
+      scrollable: find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down,
+          )
+          .first,
+    );
+    await tester.tap(find.text(original.title));
+    await tester.pumpAndSettle();
+    expect(find.text(original.password), findsNothing);
+    await tester.tap(find.byTooltip('Copy Username'));
+    await tester.pumpAndSettle();
+    expect(clipboard, original.username);
+    await tester.ensureVisible(find.text('Copy password'));
+    await tester.tap(find.text('Copy password'));
+    await tester.pumpAndSettle();
+    expect(clipboard, original.password);
+    expect(find.text(original.password), findsNothing);
+    await tester.tap(find.byTooltip('Show password for 20 seconds'));
+    await tester.pumpAndSettle();
+    expect(find.text(original.password), findsOneWidget);
+    await tester.pump(const Duration(seconds: 21));
+    await tester.pumpAndSettle();
+    expect(find.text(original.password), findsNothing);
+    expect(clipboard, '');
+    await tester.tap(find.text('Edit item'));
+    await tester.pumpAndSettle();
+    final passwordField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.labelText == 'Password',
+    );
+    expect(
+      tester.widget<TextField>(passwordField).controller!.text,
+      original.password,
+    );
+    expect(tester.widget<TextField>(passwordField).obscureText, isTrue);
+    await tester.ensureVisible(passwordField);
+    await tester.enterText(passwordField, 'Updated synthetic password 456!');
+    await tester.ensureVisible(find.text('Save item'));
+    await tester.tap(find.text('Save item'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text(original.title),
+      160,
+      scrollable: find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down,
+          )
+          .first,
+    );
+    await tester.tap(find.text(original.title));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Copy password'));
+    await tester.tap(find.text('Copy password'));
+    await tester.pumpAndSettle();
+    expect(clipboard, 'Updated synthetic password 456!');
+    expect(find.text('Password history (1)'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'enrollment copy clears after 20 seconds and phone setup completes',
     (tester) async {

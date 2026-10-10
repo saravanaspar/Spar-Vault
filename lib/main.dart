@@ -864,6 +864,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
         initialKind: initialKind,
         touch: _touch,
         integrations: integrations,
+        copy: (text) => _act(() => _copy(text)),
       ),
     );
     if (value != null && epoch == secretEpoch && vault.unlocked) {
@@ -878,7 +879,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
       EntryDetails(
         entry: entry,
         touch: _touch,
-        copy: (s) => _copy(s),
+        copy: (s) => _act(() => _copy(s)),
         save: (a) async {
           if (epoch != secretEpoch || !vault.unlocked) return;
           final b = base64Decode(a.base64Bytes);
@@ -2076,11 +2077,14 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
                     icon: const Icon(Icons.chevron_left_rounded),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'Page ${page + 1} / $pages • ${entries.length} items',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                  Flexible(
+                    child: Text(
+                      'Page ${page + 1} / $pages • ${entries.length} items',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -2953,7 +2957,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Spar Vault 0.2.5+8 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
+            'Spar Vault 0.2.6+9 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
             style: TextStyle(fontSize: 12, color: dimText, height: 1.5),
             textAlign: TextAlign.center,
           ),
@@ -2961,7 +2965,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             onPressed: () => showLicensePage(
               context: context,
               applicationName: 'Spar Vault',
-              applicationVersion: '0.2.5+8',
+              applicationVersion: '0.2.6+9',
             ),
             child: const Text('Open-source licenses'),
           ),

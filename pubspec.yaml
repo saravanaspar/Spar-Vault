@@ -1,7 +1,7 @@
 name: spar_vault
 description: Spar Vault, a local-first password vault with a nonrecoverable random master key.
 publish_to: none
-version: 0.2.5+8
+version: 0.2.6+9
 environment:
   sdk: '>=3.13.0 <4.0.0'
 dependencies:

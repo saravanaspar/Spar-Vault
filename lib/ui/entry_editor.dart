@@ -16,11 +16,13 @@ class EntryEditor extends StatefulWidget {
     this.initialKind = EntryKind.login,
     required this.touch,
     required this.integrations,
+    required this.copy,
   });
   final VaultEntry? entry;
   final EntryKind initialKind;
   final VoidCallback touch;
   final PlatformIntegrations integrations;
+  final Future<void> Function(String) copy;
   @override
   State<EntryEditor> createState() => _EntryEditorState();
 }
@@ -51,6 +53,8 @@ class _EntryEditorState extends State<EntryEditor>
   late List<String> certs = [...?widget.entry?.androidCertificates];
   String? error;
   bool working = false;
+  bool passwordRevealed = false;
+  Timer? passwordRevealTimer;
   @override
   void initState() {
     super.initState();
@@ -79,7 +83,22 @@ class _EntryEditorState extends State<EntryEditor>
     final next = sectionKinds[sections.index];
     if (section == next) return;
     FocusScope.of(context).unfocus();
-    setState(() => section = next);
+    passwordRevealTimer?.cancel();
+    setState(() {
+      section = next;
+      passwordRevealed = false;
+    });
+  }
+
+  void togglePasswordReveal() {
+    widget.touch();
+    passwordRevealTimer?.cancel();
+    setState(() => passwordRevealed = !passwordRevealed);
+    if (passwordRevealed) {
+      passwordRevealTimer = Timer(const Duration(seconds: 20), () {
+        if (mounted) setState(() => passwordRevealed = false);
+      });
+    }
   }
 
   void showError(String message, int target) {
@@ -94,6 +113,7 @@ class _EntryEditorState extends State<EntryEditor>
     bool secret = false,
     int lines = 1,
     IconData? prefixIcon,
+    Widget? suffixIcon,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: VField(
@@ -103,6 +123,7 @@ class _EntryEditorState extends State<EntryEditor>
       maxLines: lines,
       touch: widget.touch,
       prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
     ),
   );
   Future<void> attach() async {
@@ -215,6 +236,7 @@ class _EntryEditorState extends State<EntryEditor>
 
   @override
   void dispose() {
+    passwordRevealTimer?.cancel();
     sections.removeListener(sectionChanged);
     sections.dispose();
     scroll.dispose();
@@ -302,16 +324,48 @@ class _EntryEditorState extends State<EntryEditor>
         field(
           password,
           'Password',
-          secret: true,
+          secret: !passwordRevealed,
           prefixIcon: Icons.lock_outline,
+          suffixIcon: IconButton(
+            tooltip: passwordRevealed
+                ? 'Hide password'
+                : 'Show password for 20 seconds',
+            onPressed: togglePasswordReveal,
+            icon: Icon(
+              passwordRevealed ? Icons.visibility_off : Icons.visibility,
+            ),
+          ),
         ),
-        TextButton.icon(
-          onPressed: () {
-            password.text = generatePassword();
-            widget.touch();
-          },
-          icon: const Icon(Icons.auto_awesome),
-          label: const Text('Generate 24-character password'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            TextButton.icon(
+              onPressed: () {
+                widget.touch();
+                passwordRevealTimer?.cancel();
+                setState(() {
+                  password.text = generatePassword();
+                  passwordRevealed = false;
+                });
+              },
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('Generate 24-character password'),
+            ),
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: password,
+              builder: (context, value, _) => OutlinedButton.icon(
+                onPressed: value.text.isEmpty
+                    ? null
+                    : () {
+                        widget.touch();
+                        unawaited(widget.copy(value.text));
+                      },
+                icon: const Icon(Icons.copy_rounded),
+                label: const Text('Copy password'),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         field(
@@ -607,29 +661,47 @@ class _EntryDetailsState extends State<EntryDetails> {
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 4),
-        child: Text(
-          secret && !revealed ? '••••••••••••' : text,
-          style: const TextStyle(fontSize: 15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              secret && !revealed ? '••••••••••••' : text,
+              style: const TextStyle(fontSize: 15),
+            ),
+            if (secret)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    widget.touch();
+                    unawaited(widget.copy(text));
+                  },
+                  icon: const Icon(Icons.copy_rounded),
+                  label: const Text('Copy password'),
+                ),
+              ),
+          ],
         ),
       ),
-      trailing: Wrap(
-        children: [
-          if (secret)
-            IconButton(
-              tooltip: revealed ? 'Hide password' : 'Reveal for 20 seconds',
+      trailing: secret
+          ? IconButton(
+              tooltip: revealed
+                  ? 'Hide password'
+                  : 'Show password for 20 seconds',
               onPressed: reveal,
               icon: Icon(
                 revealed ? Icons.visibility_off : Icons.visibility,
                 color: dimText,
               ),
+            )
+          : IconButton(
+              tooltip: 'Copy $label',
+              onPressed: () {
+                widget.touch();
+                unawaited(widget.copy(text));
+              },
+              icon: const Icon(Icons.copy),
             ),
-          IconButton(
-            tooltip: 'Copy $label',
-            onPressed: () => widget.copy(text),
-            icon: const Icon(Icons.copy),
-          ),
-        ],
-      ),
     ),
   );
   @override
@@ -756,8 +828,12 @@ class _EntryDetailsState extends State<EntryDetails> {
           onPressed: widget.remove,
           child: const Text('Delete', style: TextStyle(color: dangerColor)),
         ),
-        TextButton(onPressed: widget.edit, child: const Text('Edit')),
-        FilledButton(
+        FilledButton.icon(
+          onPressed: widget.edit,
+          icon: const Icon(Icons.edit_outlined),
+          label: const Text('Edit item'),
+        ),
+        TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Close'),
         ),

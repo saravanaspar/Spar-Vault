@@ -116,6 +116,7 @@ class VField extends StatelessWidget {
     this.onChanged,
     this.onSubmitted,
     this.prefixIcon,
+    this.suffixIcon,
   });
   final TextEditingController controller;
   final String label;
@@ -124,6 +125,7 @@ class VField extends StatelessWidget {
   final int maxLines;
   final ValueChanged<String>? onChanged, onSubmitted;
   final IconData? prefixIcon;
+  final Widget? suffixIcon;
   @override
   Widget build(BuildContext context) => TextField(
     controller: controller,
@@ -132,6 +134,7 @@ class VField extends StatelessWidget {
       prefixIcon: prefixIcon != null
           ? Icon(prefixIcon, size: 20, color: dimText)
           : null,
+      suffixIcon: suffixIcon,
     ),
     obscureText: secret,
     maxLines: secret ? 1 : maxLines,
