@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -13,6 +14,29 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / (name + ".py"))
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
 release = load("release_tools")
+
+def publish_fixture(root, debug=False):
+    (root / "pubspec.yaml").write_text("version: 0.2.5+8\n")
+    output = root / "dist"
+    output.mkdir()
+    for platform in ["Linux_x64.tar.gz", "Windows_x64.zip", "macOS.zip"]:
+        (output / f"Spar_Vault_0.2.5_{platform}").write_bytes(b"bundle")
+    name = "Spar_Vault_0.2.5_Android" + ("_Test" if debug else "")
+    with zipfile.ZipFile(output / (name + ".zip"), "w") as archive:
+        archive.writestr(name + ".apk", b"apk")
+    return {
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REPOSITORY": "example/vault",
+        "GITHUB_SHA": "a" * 40,
+    }
+
+def existing_release_responses(files, status="ahead", draft=False, tag_sha="b" * 40):
+    return [
+        json.dumps([{"ref": "refs/tags/v0.2.5", "object": {"type": "commit", "sha": tag_sha}}]),
+        json.dumps([[{"tag_name": "v0.2.5", "draft": draft}]]),
+        json.dumps({"status": status, "base_commit": {"sha": tag_sha},
+                    "merge_base_commit": {"sha": tag_sha}, "files": files}),
+    ]
 
 def desktop_fixture(root, target, binary_name=None):
     (root / "pubspec.yaml").write_text("version: 0.2.4+7\n")
@@ -60,19 +84,7 @@ class ReleaseTests(unittest.TestCase):
         for debug in [False, True]:
             with self.subTest(debug=debug), tempfile.TemporaryDirectory() as t:
                 root = Path(t)
-                (root / "pubspec.yaml").write_text("version: 0.2.5+8\n")
-                output = root / "dist"
-                output.mkdir()
-                for platform in ["Linux_x64.tar.gz", "Windows_x64.zip", "macOS.zip"]:
-                    (output / f"Spar_Vault_0.2.5_{platform}").write_bytes(b"bundle")
-                name = "Spar_Vault_0.2.5_Android" + ("_Test" if debug else "")
-                with zipfile.ZipFile(output / (name + ".zip"), "w") as archive:
-                    archive.writestr(name + ".apk", b"apk")
-                environment = {
-                    "GITHUB_REF": "refs/heads/main",
-                    "GITHUB_REPOSITORY": "example/vault",
-                    "GITHUB_SHA": "a" * 40,
-                }
+                environment = publish_fixture(root, debug)
                 with patch.dict(os.environ, environment), patch.object(release, "gh", return_value="[]") as gh:
                     release.publish(root)
                 create = next(call for call in gh.call_args_list if call.args[:2] == ("release", "create"))
@@ -92,6 +104,92 @@ class ReleaseTests(unittest.TestCase):
                 self.assertIn("--draft", create.args)
                 self.assertEqual(gh.call_args.args[:3], ("release", "edit", "v0.2.5"))
                 self.assertIn("--draft=false", gh.call_args.args)
+
+    def test_repository_update_leaves_published_tag_and_assets_unchanged(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            environment = publish_fixture(root)
+            files = [{"filename": name} for name in [
+                "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md",
+                ".github/workflows/build-release.yml", "scripts/release_tools.py",
+                "scripts/tests/test_release_tools.py",
+            ]]
+            with patch.dict(os.environ, environment), patch.object(
+                release, "gh", side_effect=existing_release_responses(files)
+            ) as gh:
+                release.publish(root)
+            self.assertEqual(gh.call_count, 3)
+            self.assertTrue(all(call.args[0] == "api" and "--method" not in call.args
+                                for call in gh.call_args_list))
+            self.assertEqual(gh.call_args.args[1],
+                             "repos/example/vault/compare/" + "b" * 40 + "..." + "a" * 40)
+            self.assertFalse((root / "dist/SHA256SUMS.txt").exists())
+
+    def test_same_version_application_changes_and_renames_are_rejected(self):
+        paths = ["lib/main.dart", "pubspec.yaml", "pubspec.lock",
+                 "packages/vault_core/lib/src/codec.dart", "android/app/build.gradle.kts",
+                 "linux/runner/system_lock.cc", "windows/runner/system_lock.cpp",
+                 "macos/Runner/MainFlutterWindow.swift", "ios/Runner/AppDelegate.swift",
+                 "web/spar_offline.js", "browser/host.py", "assets/branding/icon.png",
+                 "LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/licenses/Flutter.txt",
+                 "scripts/prepare_web.py", "unclassified.txt"]
+        cases = [[{"filename": "README.md"}, {"filename": name}] for name in paths]
+        cases.append([{"filename": "README.md", "previous_filename": "lib/main.dart"}])
+        for files in cases:
+            with self.subTest(files=files), tempfile.TemporaryDirectory() as t:
+                root = Path(t)
+                environment = publish_fixture(root)
+                with patch.dict(os.environ, environment), patch.object(
+                    release, "gh", side_effect=existing_release_responses(files)
+                ) as gh:
+                    with self.assertRaisesRegex(ValueError, "Bump pubspec.yaml"):
+                        release.publish(root)
+                self.assertTrue(all("--method" not in call.args and call.args[0] == "api"
+                                    for call in gh.call_args_list))
+
+    def test_unverifiable_repository_comparisons_are_rejected(self):
+        cases = [
+            ([], "ahead"),
+            ([{}], "ahead"),
+            ([{"filename": "README.md"}], "diverged"),
+            ([{"filename": "README.md"}], "behind"),
+            ([{"filename": f"docs/page-{i}.md"} for i in range(300)], "ahead"),
+        ]
+        for files, status in cases:
+            with self.subTest(count=len(files), status=status), tempfile.TemporaryDirectory() as t:
+                root = Path(t)
+                environment = publish_fixture(root)
+                with patch.dict(os.environ, environment), patch.object(
+                    release, "gh", side_effect=existing_release_responses(files, status)
+                ) as gh:
+                    with self.assertRaisesRegex(ValueError, "Bump pubspec.yaml"):
+                        release.publish(root)
+                self.assertTrue(all(call.args[0] == "api" and "--method" not in call.args
+                                    for call in gh.call_args_list))
+
+    def test_draft_tag_cannot_be_retargeted_by_documentation_changes(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            environment = publish_fixture(root)
+            with patch.dict(os.environ, environment), patch.object(
+                release, "gh", side_effect=existing_release_responses(
+                    [{"filename": "README.md"}], draft=True)
+            ) as gh:
+                with self.assertRaisesRegex(ValueError, "Bump pubspec.yaml"):
+                    release.publish(root)
+            self.assertEqual(gh.call_count, 2)
+
+    def test_identical_published_commit_needs_no_comparison_or_upload(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            environment = publish_fixture(root)
+            with patch.dict(os.environ, environment), patch.object(
+                release, "gh", side_effect=existing_release_responses([], tag_sha="a" * 40)
+            ) as gh:
+                release.publish(root)
+            self.assertEqual(gh.call_count, 2)
+            self.assertTrue(all(call.args[0] == "api" and "--method" not in call.args
+                                for call in gh.call_args_list))
 
     def test_packaging_includes_runtime_assets_and_notices(self):
         with tempfile.TemporaryDirectory() as t:

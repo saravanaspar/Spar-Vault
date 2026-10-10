@@ -2,6 +2,16 @@
 
 Notable changes to Spar Vault are recorded here, newest first. The entries below summarize the recorded source updates from 0.2.0 onward.
 
+## Unreleased
+
+### Changed
+
+- Clarified the repository README's project identity, download instructions, offline operation, encryption, platform authentication, authenticator import, autofill, and recovery answers.
+
+### Fixed
+
+- Documentation and CI-tooling updates can complete main-branch CI without moving an existing release tag or republishing its assets. Application changes still require a new version.
+
 ## 0.2.5
 
 ### Fixed
