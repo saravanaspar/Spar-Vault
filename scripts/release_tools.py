@@ -144,9 +144,14 @@ def publish(root=ROOT):
     sums = output / "SHA256SUMS.txt"
     sums.write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in files))
     notes = output / "release-notes.txt"
+    android_note = (
+        "Android_Test uses debug signing and is for testing. "
+        "Configure all four Android signing secrets for a production APK. "
+        if apk_archive.name.endswith("_Android_Test.zip") else
+        "Android is a release build signed with the configured release key. "
+    )
     notes.write_text(
-        "Builds of the tested main commit. Unzip the Android archive to obtain the APK.\n\n"
-        "Android_Test uses debug signing and is for testing. Configure all four Android signing secrets for a production APK. "
+        "Builds of the tested main commit. Unzip the Android archive to obtain the APK.\n\n" + android_note +
         "Keep the same release key for upgrades. Back up your vault before switching signing keys.\n\n"
         "Windows is unsigned; macOS is ad-hoc signed and not notarized. macOS System lock requires a valid application identifier and Keychain signing entitlements. "
         "Linux requires GTK3, libfido2 and OpenSSL; System lock needs a PIN-configured FIDO2 hmac-secret key.\n")

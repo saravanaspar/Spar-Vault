@@ -2953,7 +2953,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Spar Vault 0.2.4+7 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
+            'Spar Vault 0.2.5+8 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
             style: TextStyle(fontSize: 12, color: dimText, height: 1.5),
             textAlign: TextAlign.center,
           ),
@@ -2961,7 +2961,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             onPressed: () => showLicensePage(
               context: context,
               applicationName: 'Spar Vault',
-              applicationVersion: '0.2.4+7',
+              applicationVersion: '0.2.5+8',
             ),
             child: const Text('Open-source licenses'),
           ),
