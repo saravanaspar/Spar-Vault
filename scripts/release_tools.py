@@ -115,6 +115,32 @@ def gh(*args, data=None):
     command = ["gh", *args]
     return subprocess.run(command, input=data, text=True, check=True, capture_output=True).stdout
 
+def repository_only_update(repo, base, head):
+    """Allow an existing release to survive changes outside application inputs."""
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        return False
+    comparison = json.loads(gh("api", f"repos/{repo}/compare/{base}...{head}"))
+    if not isinstance(comparison, dict) or comparison.get("status") != "ahead":
+        return False
+    for field in ("base_commit", "merge_base_commit"):
+        commit = comparison.get(field)
+        if not isinstance(commit, dict) or commit.get("sha") != base:
+            return False
+    files = comparison.get("files")
+    # GitHub comparison responses include at most 300 files. At that boundary
+    # we cannot prove there are no omitted application changes.
+    if not isinstance(files, list) or not files or len(files) >= 300:
+        return False
+    documents = {"README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "AUTHORS.md"}
+    def allowed(name):
+        return isinstance(name, str) and (
+            name in documents or name.startswith("docs/") and name.endswith(".md") or
+            name.startswith(".github/") or name == "scripts/release_tools.py" or
+            name.startswith("scripts/tests/") and name.endswith(".py"))
+    return all(isinstance(file, dict) and allowed(file.get("filename")) and
+               ("previous_filename" not in file or allowed(file["previous_filename"]))
+               for file in files)
+
 def publish(root=ROOT):
     if os.environ.get("GITHUB_REF") != "refs/heads/main":
         raise ValueError("Releases may be published only from main.")
@@ -132,13 +158,18 @@ def publish(root=ROOT):
     tag = "v" + release
     refs = json.loads(gh("api", f"repos/{repo}/git/matching-refs/tags/{tag}"))
     exact = next((r for r in refs if r["ref"] == "refs/tags/" + tag), None)
+    releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
+    existing = next((r for page in releases for r in page if r["tag_name"] == tag), None)
     if exact:
+        if (exact["object"]["type"] == "commit" and exact["object"]["sha"] != sha and
+                existing and not existing["draft"] and
+                repository_only_update(repo, exact["object"]["sha"], sha)):
+            print(f"{tag} is already published; repository-only changes leave its tag and assets unchanged.")
+            return
         if exact["object"]["type"] != "commit" or exact["object"]["sha"] != sha:
             raise ValueError("Existing tag points at another commit. Bump pubspec.yaml; published tags are never moved.")
     else:
         gh("api", "--method", "POST", f"repos/{repo}/git/refs", "--input", "-", data=json.dumps({"ref": "refs/tags/" + tag, "sha": sha}))
-    releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
-    existing = next((r for page in releases for r in page if r["tag_name"] == tag), None)
     if existing and not existing["draft"]:
         print(f"{tag} is already published; leaving it unchanged."); return
     sums = output / "SHA256SUMS.txt"

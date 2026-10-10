@@ -25,6 +25,8 @@ Vault changes must preserve existing-file compatibility or include an explicit m
 
 Increment `version: X.Y.Z+build` in `pubspec.yaml`, update the About text and offline-cache version, record the changes in [CHANGELOG.md](CHANGELOG.md), and merge through a pull request. A successful main build creates the version tag and GitHub release after validation and all four platform builds pass. Published tags are immutable; use another version for corrections.
 
+Documentation and repository CI-tooling updates can retain the current application version. CI still validates and builds every target, but leaves an already published release unchanged when the complete comparison from its tagged commit contains only permitted repository files. Changes to application code, dependencies, assets, native runners, browser integration, or bundled notices require a new version. An incomplete comparison or an existing draft from another commit is rejected rather than treated as a documentation update.
+
 The workflow packages the complete desktop application bundles and license notices using `scripts/release_tools.py`. Preserve the application IDs and signing identities across updates. Native authentication, camera scanning, autofill, and nearby discovery must also be checked on the affected target devices.
 
 ### Android signing
