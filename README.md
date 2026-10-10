@@ -101,6 +101,8 @@ flutter run
 
 Resolve both packages before running analysis or tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete validation commands and release configuration.
 
+On Android, debug and profile builds install as **Spar Vault Dev** alongside the stable application, with separate vault data. Use a backup to copy data between them. Stable updates must retain the release application ID and signing key; see [Android development and updates](CONTRIBUTING.md#android-development-and-updates).
+
 ## Building
 
 Build desktop applications on their corresponding operating systems.

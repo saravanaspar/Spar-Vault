@@ -6,9 +6,15 @@ import 'package:vault_core/vault_core.dart';
 
 import 'device_security.dart';
 import 'installed_app.dart';
+import 'key_file_result.dart';
 
 @JS('sparBackupChoose')
 external JSPromise<JSString> _choose();
+@JS('sparSaveMasterKey')
+external JSPromise<JSString> _saveMasterKey(
+  JSUint8Array bytes,
+  JSFunction canSave,
+);
 @JS('sparBackupWrite')
 external JSPromise<JSAny?> _write(
   JSString directory,
@@ -22,6 +28,29 @@ external JSPromise<JSString> _list(JSString id);
 external JSPromise<JSString> _read(JSString name);
 
 class PlatformIntegrations {
+  Future<KeyFileSaveResult?> saveMasterKey(
+    Uint8List bytes, {
+    required bool Function() canSave,
+  }) async {
+    final key = MasterKey.parse(utf8.decode(bytes));
+    key.destroy();
+    try {
+      return switch ((await _saveMasterKey(
+        bytes.toJS,
+        canSave.toJS,
+      ).toDart).toDart) {
+        'saved' => KeyFileSaveResult.saved,
+        'download' => KeyFileSaveResult.downloadRequested,
+        'cancelled' => null,
+        _ => throw const FormatException('Unexpected key-file result.'),
+      };
+    } catch (_) {
+      throw const FormatException(
+        'Could not save the key file. Allow folder access in a browser that supports folder saving, or use the native app.',
+      );
+    }
+  }
+
   Future<void> nearbyPermission() async {}
   Future<void> nearbyAdvertise(Map<String, Object> metadata) async {}
   Future<List<Map>> nearbyScan() async => [];

@@ -92,6 +92,7 @@ class ReleaseTests(unittest.TestCase):
                 notes = notes_file.read_text()
                 if debug:
                     self.assertIn("Android_Test", notes)
+                    self.assertIn("Spar Vault Dev with its own vault data", notes)
                     self.assertIn("debug signing", notes)
                     self.assertIn("Configure all four Android signing secrets", notes)
                     self.assertNotIn("Android is a release build", notes)

@@ -29,6 +29,19 @@ Documentation and repository CI-tooling updates can retain the current applicati
 
 The workflow packages the complete desktop application bundles and license notices using `scripts/release_tools.py`. Preserve the application IDs and signing identities across updates. Native authentication, camera scanning, autofill, and nearby discovery must also be checked on the affected target devices.
 
+### Android development and updates
+
+`flutter run` and `flutter build apk --debug` install **Spar Vault Dev** with application ID `com.bnstechsystems.sable_vault.dev`. Profile builds use the same Dev identity. The release application retains `com.bnstechsystems.sable_vault`, so both applications can remain installed while testing. Their vaults, preferences, and system-authentication bindings are separate; export and restore a backup explicitly if test data is needed. Android permits one selected autofill service at a time.
+
+Update the installed stable application with an APK signed by its original release key and a newer version code:
+
+```bash
+flutter build apk --release
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+`adb install -r` replaces the application while retaining its private data. If Android rejects a signature mismatch or version downgrade, resolve the signing/version configuration and retry. Do not uninstall the stable application to work around that failure; uninstalling removes its local vault. Older debug builds that used the stable application ID remain separate from the new Dev application and can be recovered through encrypted backup restore.
+
 ### Android signing
 
 For a local release build, create the ignored `android/key.properties` file with your private keystore configuration:

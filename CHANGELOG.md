@@ -2,6 +2,19 @@
 
 Notable changes to Spar Vault are recorded here, newest first. The entries below summarize the recorded source updates from 0.2.0 onward.
 
+## 0.2.7
+
+### Changed
+
+- Secure-key export selects a private folder and replaces `spar-vault-master-key.txt` there instead of creating numbered duplicates. Other folders keep independent copies. Supported browsers use folder saving; browsers without folder access retain download export with an explicit limitation message.
+- Android debug and profile builds use the separate `com.bnstechsystems.sable_vault.dev` application ID and **Spar Vault Dev** label. They can coexist with the stable application and keep independent vault storage and device bindings.
+- Added development and in-place Android update instructions, including the requirement to retain the original release signing key.
+
+### Fixed
+
+- Late folder-picker results cannot export a secure key after its creation or rotation session has been locked or replaced.
+- Desktop key replacement writes a private temporary file before committing it. Android verifies the written key and attempts to restore the previous content if replacement fails.
+
 ## 0.2.6
 
 ### Added

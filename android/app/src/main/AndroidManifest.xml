@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <application
-        android:label="Spar Vault"
+        android:label="${appLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -15,7 +15,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="false">
         <activity
-            android:name=".MainActivity"
+            android:name="com.bnstechsystems.sable_vault.MainActivity"
             android:enableOnBackInvokedCallback="true"
             android:exported="true"
             android:launchMode="singleTop"
@@ -37,11 +37,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <service android:name=".SparAutofillService" android:exported="true" android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+        <service android:name="com.bnstechsystems.sable_vault.SparAutofillService" android:exported="true" android:permission="android.permission.BIND_AUTOFILL_SERVICE">
             <intent-filter><action android:name="android.service.autofill.AutofillService" /></intent-filter>
             <meta-data android:name="android.autofill" android:resource="@xml/autofill_service" />
         </service>
-        <activity android:name=".AutofillConfirmActivity" android:exported="false" android:excludeFromRecents="true" android:theme="@android:style/Theme.Material.NoActionBar" />
+        <activity android:name="com.bnstechsystems.sable_vault.AutofillConfirmActivity" android:exported="false" android:excludeFromRecents="true" android:theme="@android:style/Theme.Material.NoActionBar" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

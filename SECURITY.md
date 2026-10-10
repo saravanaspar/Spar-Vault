@@ -1,10 +1,12 @@
-# Security status and boundaries — Spar Vault 0.2.4
+# Security status and boundaries — Spar Vault
 
 This is a development implementation, not an independently audited password manager. Tests and compile checks cannot establish “fully secure” or comparative “most secure” status. Use synthetic credentials until independent review and device release testing are complete.
 
 ## Unlock and irrecoverability
 
 Creation generates a uniformly random 32-byte root key with `Random.secure()`. The 64 hexadecimal characters encode that key; they are not a human password or wallet seed. Secure-key unlock always remains available. Explicit copy/save creates an **unencrypted** external key copy. Anyone with that copy and a vault snapshot can open it; store it separately and privately.
+
+Folder-based key export replaces the exact `spar-vault-master-key.txt` in the selected folder. Preserve older keys separately if old backups still need them, especially before rotating the root key. Existing numbered exports are not automatically deleted because they may be the only recovery keys for older vaults. Browsers without folder-writing support can request a download but cannot control the browser's duplicate-filename policy.
 
 Optional password unlock wraps this same random root using Argon2id v1.3 (19,456 KiB / 19 MiB, 2 iterations, 1 lane, 32-byte output) and AES-256-GCM. The salt is 32 random bytes and the nonce is 12 random bytes per wrapper. The fixed bounded profile meets OWASP's minimum Argon2id profile; it is not a claim of optimal cost on every device. The password must be unique and at least 15 characters. Offline attackers can copy and guess against the wrapper; app delays or lockouts would not stop that. No HKDF-only password derivation, raw password storage or recoverable password hint is added.
 

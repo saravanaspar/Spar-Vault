@@ -621,17 +621,27 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
   Future<void> _saveKey(MasterKey key) async {
     if (!await _confirm(
       'Save an unencrypted key file?',
-      'Anyone with this key and your encrypted backup can open the vault. Store the key privately, separate from backups.',
+      'Anyone with this key and your encrypted backup can open the vault. Choose a private folder, separate from backups. Saving there replaces spar-vault-master-key.txt. Older backups may still need the previous key; keep it separately before replacing it.',
     )) {
       return;
     }
     if (!identical(generated, key)) return;
+    final epoch = secretEpoch;
     final bytes = Uint8List.fromList(utf8.encode('${key.display()}\n'));
     try {
-      if (await _save('spar-vault-master-key.txt', bytes, [
-        'txt',
-      ], mime: 'text/plain')) {
-        _message('Key file saved or download requested. Keep it private.');
+      final result = await integrations.saveMasterKey(
+        bytes,
+        canSave: () =>
+            mounted && epoch == secretEpoch && identical(generated, key),
+      );
+      if (result == KeyFileSaveResult.saved) {
+        _message(
+          'Key file saved. The selected folder now has the current key.',
+        );
+      } else if (result == KeyFileSaveResult.downloadRequested) {
+        _message(
+          'Key download requested. This browser controls duplicate filenames; replace the old file manually or use the native app for folder saving.',
+        );
       }
     } finally {
       bytes.fillRange(0, bytes.length, 0);
@@ -1359,8 +1369,13 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(width: 10),
-            const Flexible(
-              child: Text('Spar Vault', overflow: TextOverflow.ellipsis),
+            Flexible(
+              child: Text(
+                integrations.isAndroid && !kReleaseMode
+                    ? 'Spar Vault Dev'
+                    : 'Spar Vault',
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             if (vault.unlocked && MediaQuery.sizeOf(context).width > 600) ...[
               const SizedBox(width: 12),
@@ -2957,7 +2972,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Spar Vault 0.2.6+9 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
+            'Spar Vault 0.2.7+10 • No telemetry • No provider recovery\nAttachments, old passwords, codes and settings are encrypted inside the vault. Managed runtimes cannot guarantee erasure of immutable strings or copies made by the OS.',
             style: TextStyle(fontSize: 12, color: dimText, height: 1.5),
             textAlign: TextAlign.center,
           ),
@@ -2965,7 +2980,7 @@ class _VaultHomeState extends State<VaultHome> with WidgetsBindingObserver {
             onPressed: () => showLicensePage(
               context: context,
               applicationName: 'Spar Vault',
-              applicationVersion: '0.2.6+9',
+              applicationVersion: '0.2.7+10',
             ),
             child: const Text('Open-source licenses'),
           ),
