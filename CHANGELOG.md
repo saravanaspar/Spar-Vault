@@ -2,25 +2,11 @@
 
 Notable changes to Spar Vault are recorded here, newest first. The entries below summarize the recorded source updates from 0.2.0 onward.
 
-## Unreleased
+## 0.2.5
 
 ### Fixed
 
-- Linux and Windows release packaging now reads the executable name from the platform CMake configuration, fixing rejected bundles that contain the existing `sable_vault` runner.
-
-### Changed
-
-- Rewrote the README around application features, platform support, development, and builds.
-- Consolidated Android signing and release configuration in the contributor guide.
-
-### Added
-
-- This changelog, covering the recorded 0.2.0–0.2.4 update history.
-
-### Removed
-
-- One-time repository administration helpers: `protect_main.py`, `cleanup_docs.py`, and `setup_android_signing.py`.
-- Tests that depended on the removed branch-protection helper. Build, packaging, and web tooling remain supported.
+- Release notes now distinguish Android builds signed with the configured release key from debug-signed `Android_Test` builds, instead of describing every Android package as a test build.
 
 ## 0.2.4
 
@@ -31,15 +17,24 @@ Notable changes to Spar Vault are recorded here, newest first. The entries below
 - Android release-keystore configuration and CI signing support. When signing secrets are absent, CI produces an explicitly labelled `Android_Test` APK; partially configured signing secrets are rejected.
 - MIT license, author attribution, contributor guidance, third-party notices, and issue and pull-request templates.
 - An in-app open-source licenses page.
+- This changelog, covering the recorded 0.2.0–0.2.4 update history.
 
 ### Changed
 
 - Renamed the shared device unlock option from **Phone screen lock** to **System lock**.
 - Removed obsolete audit and update reports from the maintained documentation.
+- Rewrote the README around application features, platform support, development, and builds.
+- Consolidated Android signing and release configuration in the contributor guide.
 
 ### Fixed
 
 - Desktop native key handling copies platform response bytes into owned, writable buffers before cleanup.
+- Linux and Windows release packaging reads the executable name from the platform CMake configuration, fixing rejected bundles that contain the existing `sable_vault` runner.
+
+### Removed
+
+- One-time repository administration helpers: `protect_main.py`, `cleanup_docs.py`, and `setup_android_signing.py`.
+- Tests that depended on the removed branch-protection helper. Build, packaging, and web tooling remain supported.
 
 ## 0.2.3
 

@@ -56,6 +56,43 @@ class ReleaseTests(unittest.TestCase):
         with patch.dict(os.environ, {"GITHUB_REF": "refs/pull/42/merge"}):
             with self.assertRaises(ValueError): release.publish()
 
+    def test_published_release_notes_match_android_build(self):
+        for debug in [False, True]:
+            with self.subTest(debug=debug), tempfile.TemporaryDirectory() as t:
+                root = Path(t)
+                (root / "pubspec.yaml").write_text("version: 0.2.5+8\n")
+                output = root / "dist"
+                output.mkdir()
+                for platform in ["Linux_x64.tar.gz", "Windows_x64.zip", "macOS.zip"]:
+                    (output / f"Spar_Vault_0.2.5_{platform}").write_bytes(b"bundle")
+                name = "Spar_Vault_0.2.5_Android" + ("_Test" if debug else "")
+                with zipfile.ZipFile(output / (name + ".zip"), "w") as archive:
+                    archive.writestr(name + ".apk", b"apk")
+                environment = {
+                    "GITHUB_REF": "refs/heads/main",
+                    "GITHUB_REPOSITORY": "example/vault",
+                    "GITHUB_SHA": "a" * 40,
+                }
+                with patch.dict(os.environ, environment), patch.object(release, "gh", return_value="[]") as gh:
+                    release.publish(root)
+                create = next(call for call in gh.call_args_list if call.args[:2] == ("release", "create"))
+                notes_file = Path(create.args[create.args.index("--notes-file") + 1])
+                notes = notes_file.read_text()
+                if debug:
+                    self.assertIn("Android_Test", notes)
+                    self.assertIn("debug signing", notes)
+                    self.assertIn("Configure all four Android signing secrets", notes)
+                    self.assertNotIn("Android is a release build", notes)
+                else:
+                    self.assertIn("Android is a release build", notes)
+                    self.assertIn("configured release key", notes)
+                    self.assertNotIn("Android_Test", notes)
+                    self.assertNotIn("debug signing", notes)
+                self.assertEqual(create.args[2], "v0.2.5")
+                self.assertIn("--draft", create.args)
+                self.assertEqual(gh.call_args.args[:3], ("release", "edit", "v0.2.5"))
+                self.assertIn("--draft=false", gh.call_args.args)
+
     def test_packaging_includes_runtime_assets_and_notices(self):
         with tempfile.TemporaryDirectory() as t:
             p = Path(t)
