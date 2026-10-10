@@ -56,6 +56,15 @@ def notices(root):
             raise ValueError(f"Missing distribution notice: {name}")
     return names
 
+def desktop_runner_name(root, target):
+    cmake = root / target / "CMakeLists.txt"
+    names = re.findall(
+        r'^[ \t]*set\([ \t]*BINARY_NAME[ \t]+"([A-Za-z0-9][A-Za-z0-9_.-]*)"[ \t]*\)[ \t]*(?:#.*)?$',
+        cmake.read_text(), re.M)
+    if len(names) != 1:
+        raise ValueError(f"Expected one literal BINARY_NAME in {target}/CMakeLists.txt.")
+    return names[0] + (".exe" if target == "windows" else "")
+
 def package(target, mode="release", root=ROOT):
     release, _ = version(root)
     output = root / "dist"; output.mkdir(exist_ok=True)
@@ -63,8 +72,9 @@ def package(target, mode="release", root=ROOT):
     license_files = notices(root)
     if target == "linux":
         bundle = root / "build/linux/x64/release/bundle"
-        if not (bundle / "spar_vault").is_file():
-            raise ValueError("Linux runner missing.")
+        runner = desktop_runner_name(root, target)
+        if not (bundle / runner).is_file():
+            raise ValueError(f"Linux runner missing: {runner}")
         dest = output / f"{prefix}_Linux_x64.tar.gz"
         with tarfile.open(dest, "w:gz") as archive:
             archive.add(bundle, arcname="Spar_Vault")
@@ -87,7 +97,8 @@ def package(target, mode="release", root=ROOT):
         dest = output / (f"{prefix}_Windows_x64.zip" if target == "windows" else f"{prefix}_Android{'_Test' if mode == 'debug' else ''}.zip")
         if target == "windows":
             bundle = root / "build/windows/x64/runner/Release"
-            if not (bundle / "spar_vault.exe").is_file(): raise ValueError("Windows runner missing.")
+            runner = desktop_runner_name(root, target)
+            if not (bundle / runner).is_file(): raise ValueError(f"Windows runner missing: {runner}")
             files = [(p, "Spar_Vault/" + p.relative_to(bundle).as_posix()) for p in bundle.rglob("*") if p.is_file()]
         elif target == "android":
             apk = root / f"build/app/outputs/flutter-apk/app-{mode}.apk"

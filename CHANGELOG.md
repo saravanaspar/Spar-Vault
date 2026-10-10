@@ -4,6 +4,10 @@ Notable changes to Spar Vault are recorded here, newest first. The entries below
 
 ## Unreleased
 
+### Fixed
+
+- Linux and Windows release packaging now reads the executable name from the platform CMake configuration, fixing rejected bundles that contain the existing `sable_vault` runner.
+
 ### Changed
 
 - Rewrote the README around application features, platform support, development, and builds.
