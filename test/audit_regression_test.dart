@@ -55,6 +55,7 @@ Future<void> openEditor(
   VaultEntry? entry,
   EntryKind initialKind = EntryKind.login,
   required ValueChanged<VaultEntry?> onSaved,
+  Future<void> Function(String)? onCopied,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -71,6 +72,7 @@ Future<void> openEditor(
                     initialKind: initialKind,
                     touch: () {},
                     integrations: EditorAndroidIntegrations(),
+                    copy: onCopied ?? (_) async {},
                   ),
                 ),
               );
@@ -86,6 +88,75 @@ Future<void> openEditor(
 }
 
 void main() {
+  testWidgets(
+    'generated password can be revealed, copied and saved on mobile',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      VaultEntry? saved;
+      String? copied;
+      await openEditor(
+        tester,
+        onSaved: (value) => saved = value,
+        onCopied: (value) async => copied = value,
+      );
+      await tester.enterText(editorField('Title'), 'New login');
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Copy password'),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.ensureVisible(find.text('Generate 24-character password'));
+      await tester.tap(find.text('Generate 24-character password'));
+      await tester.pumpAndSettle();
+      final generated = tester
+          .widget<TextField>(editorField('Password'))
+          .controller!
+          .text;
+      expect(generated.length, 24);
+      expect(
+        tester.widget<TextField>(editorField('Password')).obscureText,
+        isTrue,
+      );
+      await tester.ensureVisible(find.text('Copy password'));
+      await tester.tap(find.text('Copy password'));
+      await tester.pumpAndSettle();
+      expect(copied, generated);
+      await tester.ensureVisible(
+        find.byTooltip('Show password for 20 seconds'),
+      );
+      await tester.tap(find.byTooltip('Show password for 20 seconds'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(editorField('Password')).obscureText,
+        isFalse,
+      );
+      await tester.pump(const Duration(seconds: 21));
+      expect(
+        tester.widget<TextField>(editorField('Password')).obscureText,
+        isTrue,
+      );
+      await tester.tap(find.byTooltip('Show password for 20 seconds'));
+      await tester.pumpAndSettle();
+      await editorTab(tester, 'Extra notes');
+      await editorTab(tester, 'Login');
+      expect(
+        tester.widget<TextField>(editorField('Password')).obscureText,
+        isTrue,
+      );
+      await tester.tap(find.text('Save item'));
+      await tester.pumpAndSettle();
+      expect(saved!.password, generated);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('mobile Security empty rows wrap without pixel overflow', (
     tester,
   ) async {

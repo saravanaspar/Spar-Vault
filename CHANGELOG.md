@@ -2,14 +2,20 @@
 
 Notable changes to Spar Vault are recorded here, newest first. The entries below summarize the recorded source updates from 0.2.0 onward.
 
-## Unreleased
+## 0.2.6
+
+### Added
+
+- Eye control and labelled Copy password action in the login editor, including generated passwords. Revealed passwords hide after 20 seconds and when leaving the Login tab.
 
 ### Changed
 
+- Saved-item details show a labelled Copy password action and a prominent Edit item button. Copying uses the existing session checks and timed clipboard cleanup.
 - Clarified the repository README's project identity, download instructions, offline operation, encryption, platform authentication, authenticator import, autofill, and recovery answers.
 
 ### Fixed
 
+- The vault page indicator wraps on narrow mobile screens instead of overflowing horizontally.
 - Documentation and CI-tooling updates can complete main-branch CI without moving an existing release tag or republishing its assets. Application changes still require a new version.
 
 ## 0.2.5
